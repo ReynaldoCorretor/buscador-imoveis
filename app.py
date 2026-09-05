@@ -79,6 +79,7 @@ def buscar():
         resultado_json=json.dumps(resultado, ensure_ascii=False),
         total=resultado["total"],
         erros=resultado["erros"],
+        diagnosticos_por_portal=resultado["diagnosticos_por_portal"],
     )
 
 

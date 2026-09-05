@@ -83,11 +83,33 @@ buscador-imoveis/
 - O **Chaves na Mão** só permite consultar a página 1 dos resultados,
   porque a paginação desse portal é bloqueada pelo `robots.txt` do site.
 - Os padrões de extração (regex) foram validados com HTML sintético em
-  `test_scrapers.py` (10 testes, todos passando). O comportamento contra
-  os sites reais só pode ser confirmado depois do deploy — se algum
-  portal retornar poucos ou nenhum resultado depois de publicado, é
-  provável que o layout daquele site tenha mudado e os padrões de
-  extração precisem de ajuste.
+  `test_scrapers.py` (13 testes, todos passando). O comportamento contra
+  os sites reais só pode ser confirmado depois do deploy.
+- **Bloqueio antirrobô**: portais grandes como VivaReal, ZAP e Imovelweb
+  costumam ter proteção contra acessos automatizados, que pode bloquear
+  pedidos vindos de servidores como o do Render (mesmo que o site
+  funcione normalmente num navegador comum). Se isso acontecer, a página
+  de resultados mostra 0 imóveis, mas o **"Diagnóstico técnico desta
+  busca"** no final da página revela o motivo exato (código de erro HTTP,
+  timeout etc.) — copie esse texto e envie para ajuste, se precisar.
+
+## Se a busca voltar a dar 0 resultados
+
+1. Abra o resultado da busca e clique em **"Diagnóstico técnico desta
+   busca"**, no final da página.
+2. Veja o que aparece para cada portal:
+   - `HTTP 200 OK — N links encontrados`: o portal respondeu normalmente.
+     Se mesmo assim não apareceu nenhum imóvel, o layout do site pode ter
+     mudado (padrão de extração desatualizado).
+   - `HTTP 403` ou `HTTP 429`: o portal bloqueou o pedido do servidor
+     (proteção antirrobô). Isso é uma limitação do plano gratuito/servidor
+     compartilhado, difícil de contornar sem soluções mais caras
+     (ex: navegador automatizado ou serviço de proxy pago).
+   - `erro de conexão` ou `tempo esgotado`: problema de rede pontual —
+     tente buscar de novo.
+3. Copie o texto do diagnóstico e envie para quem mantém o projeto — isso
+   acelera bastante a correção, pois mostra exatamente o que o servidor
+   recebeu de cada portal.
 
 ## Rodando os testes localmente (opcional)
 

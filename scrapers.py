@@ -1,34 +1,42 @@
 # -*- coding: utf-8 -*-
 """
-scrapers.py
+scrapers.py (v2)
 
 Módulo responsável por buscar imóveis à venda em 4 portais (VivaReal, ZAP
 Imóveis, Imovelweb e Chaves na Mão) a partir de um único formulário de busca.
 
-DECISÃO DE ARQUITETURA (ver claude/buscador-imoveis-app.md):
-- A extração de dados NÃO é feita por parsing "bonito" de HTML/CSS (frágil e
-  difícil de validar sem acesso direto à internet no ambiente de
-  desenvolvimento). Em vez disso, usamos regex:
-    * VivaReal e Chaves na Mão embutem quartos/área/preço no próprio slug
-      da URL do anúncio -> extraímos direto da URL.
-    * ZAP Imóveis e Imovelweb não têm esse padrão de slug tão completo,
-      então usamos uma "janela" de texto ao redor de cada link no HTML
-      bruto da página de resultados para procurar preço/área/quartos/
-      banheiros nas proximidades.
-- Quando um dado não é encontrado, o imóvel NÃO é descartado: ele aparece
-  marcado como "dados_incompletos": True para o usuário conferir no anúncio
-  original.
-- Limitação conhecida: cada portal permite consultar poucas páginas por
-  busca (Chaves na Mão só a página 1, por causa do robots.txt). Não há
-  garantia de cobertura de 100% dos anúncios disponíveis em cada cidade.
+MUDANÇAS NESTA VERSÃO (v2), feitas após o primeiro deploy real ter retornado
+"0 imóveis encontrados" mesmo sem filtros:
+
+1. CORREÇÃO DE BUG: os links reais do VivaReal (e possivelmente de outros
+   portais) vêm com parâmetros de rastreamento no final, ex:
+   ".../venda-RS980000-id-2694147297/?source=ranking%2Crp". O código antigo
+   pegava o texto depois da ÚLTIMA barra "/" para extrair o "slug" do
+   imóvel, mas como existe uma barra logo antes do "?", ele acabava
+   pegando o parâmetro de rastreamento em vez do nome do imóvel. Agora o
+   link é limpo (removendo tudo a partir do "?") antes de calcular o slug.
+
+2. DIAGNÓSTICO VISÍVEL: antes, se um portal bloqueasse o pedido (comum em
+   portais grandes, que usam proteção antirrobô contra servidores como o
+   Render), o código simplesmente devolvia uma lista vazia, sem avisar o
+   motivo. Agora cada busca registra o que aconteceu em cada página
+   (sucesso, código de erro HTTP, timeout, etc.) e isso é devolvido junto
+   com os resultados, para aparecer na tela e ajudar a diagnosticar.
+
+3. CABEÇALHOS mais completos (parecidos com os de um navegador real), para
+   reduzir a chance de bloqueio simples por User-Agent.
+
+Continua valendo a decisão de arquitetura original: extração via regex
+sobre os links e sobre o HTML ao redor deles (não parsing "bonito" de
+HTML), e imóveis com dado faltante não são descartados — só marcados como
+"dados_incompletos".
 """
 
 import re
-import time
 import logging
-from dataclasses import dataclass, field
-from typing import List, Optional
-from urllib.parse import quote
+from dataclasses import dataclass
+from typing import List, Optional, Tuple
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
@@ -38,9 +46,21 @@ logger = logging.getLogger(__name__)
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,*/*;q=0.8"
     ),
     "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Cache-Control": "max-age=0",
 }
 
 REQUEST_TIMEOUT = 15
@@ -91,8 +111,16 @@ def _slug_cidade(cidade: str) -> str:
     return txt
 
 
+def _limpar_link(link: str) -> str:
+    """Remove parâmetros de query (?...) e fragmentos (#...) de um link,
+    devolvendo a URL "limpa" do anúncio. Isso corrige o bug em que o slug
+    do imóvel era confundido com parâmetros de rastreamento como
+    '?source=ranking,rp'."""
+    partes = urlsplit(link)
+    return urlunsplit((partes.scheme, partes.netloc, partes.path, "", ""))
+
+
 def _extrair_preco_de_texto(texto: str) -> Optional[float]:
-    """Procura um valor em R$ dentro de um trecho de texto/HTML."""
     padrao = re.compile(r"R\$\s*([\d\.]{4,})")
     m = padrao.search(texto)
     if not m:
@@ -129,24 +157,52 @@ def _extrair_banheiros_de_texto(texto: str) -> Optional[int]:
 
 
 def _janela_ao_redor(html: str, indice_inicio: int, indice_fim: int, tamanho: int = 400) -> str:
-    """Retorna um trecho do HTML bruto ao redor de um link, para procurar
-    preço/área/quartos/banheiros que estejam próximos ao link mas fora dele
-    (usado para ZAP e Imovelweb)."""
     inicio = max(0, indice_inicio - tamanho)
     fim = min(len(html), indice_fim + tamanho)
     return html[inicio:fim]
 
 
-def _buscar_pagina(url: str) -> Optional[str]:
+def _buscar_pagina(url: str) -> Tuple[Optional[str], str]:
+    """Busca uma página e devolve (html_ou_None, mensagem_de_diagnostico).
+
+    A mensagem de diagnóstico é sempre preenchida (sucesso ou falha), para
+    que quem chamar essa função possa reportar o que aconteceu, em vez de
+    simplesmente ver "0 resultados" sem saber o motivo.
+    """
     try:
         resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-        if resp.status_code != 200:
-            logger.warning("Status %s ao buscar %s", resp.status_code, url)
-            return None
-        return resp.text
+    except requests.Timeout:
+        msg = f"{url} -> tempo esgotado (timeout) após {REQUEST_TIMEOUT}s"
+        logger.warning(msg)
+        return None, msg
     except requests.RequestException as exc:
-        logger.warning("Falha ao buscar %s: %s", url, exc)
-        return None
+        msg = f"{url} -> erro de conexão: {exc}"
+        logger.warning(msg)
+        return None, msg
+
+    if resp.status_code == 200:
+        # Uma resposta 200 muito curta costuma indicar página de bloqueio/captcha
+        if len(resp.text) < 2000:
+            msg = (
+                f"{url} -> HTTP 200, mas conteúdo muito curto "
+                f"({len(resp.text)} caracteres) — pode ser página de bloqueio/captcha"
+            )
+            logger.warning(msg)
+            return resp.text, msg
+        msg = f"{url} -> HTTP 200 OK ({len(resp.text)} caracteres)"
+        return resp.text, msg
+
+    if resp.status_code in (403, 429):
+        msg = (
+            f"{url} -> HTTP {resp.status_code} "
+            "(provável bloqueio antirrobô do portal para este servidor)"
+        )
+        logger.warning(msg)
+        return None, msg
+
+    msg = f"{url} -> HTTP {resp.status_code}"
+    logger.warning(msg)
+    return None, msg
 
 
 def _aplica_filtros_basicos(
@@ -180,10 +236,11 @@ def _aplica_filtros_basicos(
 # VivaReal — dados extraídos direto do slug da URL
 # ---------------------------------------------------------------------------
 
-def buscar_vivareal(cidade: str, uf: str, max_paginas: int = 3) -> List[Imovel]:
+def buscar_vivareal(cidade: str, uf: str, max_paginas: int = 3) -> Tuple[List[Imovel], List[str]]:
     slug_cidade = _slug_cidade(cidade)
     slug_uf = uf.lower()
     imoveis: List[Imovel] = []
+    diagnosticos: List[str] = []
 
     link_padrao = re.compile(
         r'href="(https://www\.vivareal\.com\.br/(?:imovel|imoveis-lancamentos)/[^"]+)"'
@@ -195,12 +252,14 @@ def buscar_vivareal(cidade: str, uf: str, max_paginas: int = 3) -> List[Imovel]:
         else:
             url = f"https://www.vivareal.com.br/venda/{slug_uf}/{slug_cidade}/?pagina={pagina}"
 
-        html = _buscar_pagina(url)
+        html, diag = _buscar_pagina(url)
+        diagnosticos.append(diag)
         if not html:
             continue
 
-        links_encontrados = set(link_padrao.findall(html))
-        for link in links_encontrados:
+        links_brutos = set(link_padrao.findall(html))
+        for link_bruto in links_brutos:
+            link = _limpar_link(link_bruto)
             slug = link.rstrip("/").rsplit("/", 1)[-1]
 
             preco_match = re.search(r"[Vv]enda-RS(\d+)", link)
@@ -209,7 +268,7 @@ def buscar_vivareal(cidade: str, uf: str, max_paginas: int = 3) -> List[Imovel]:
             area_match = re.search(r"-(\d{2,4})m2-", link)
             area = float(area_match.group(1)) if area_match else None
 
-            quartos_match = re.search(r"^[a-z-]*?(\d)-quartos?-", slug)
+            quartos_match = re.search(r"(\d)-quartos?-", slug)
             quartos = int(quartos_match.group(1)) if quartos_match else None
 
             titulo = slug.replace("-", " ").replace("id ", "").strip().title()
@@ -228,35 +287,36 @@ def buscar_vivareal(cidade: str, uf: str, max_paginas: int = 3) -> List[Imovel]:
                 )
             )
 
-    return imoveis
+        diagnosticos[-1] += f" — {len(links_brutos)} links de imóveis encontrados nesta página"
+
+    return imoveis, diagnosticos
 
 
 # ---------------------------------------------------------------------------
 # Chaves na Mão — dados também extraídos do slug da URL
 # ---------------------------------------------------------------------------
 
-def buscar_chavesnamao(cidade: str, uf: str, max_paginas: int = 1) -> List[Imovel]:
-    # robots.txt deste portal bloqueia páginas além da 1; respeitamos isso.
+def buscar_chavesnamao(cidade: str, uf: str, max_paginas: int = 1) -> Tuple[List[Imovel], List[str]]:
     slug_cidade = _slug_cidade(cidade)
     slug_uf = uf.lower()
     imoveis: List[Imovel] = []
+    diagnosticos: List[str] = []
 
     link_padrao = re.compile(
         r'href="(https://www\.chavesnamao\.com\.br/imovel/[^"]+)"'
     )
 
     url = f"https://www.chavesnamao.com.br/imoveis-a-venda/{slug_uf}-{slug_cidade}/"
-    html = _buscar_pagina(url)
+    html, diag = _buscar_pagina(url)
+    diagnosticos.append(diag)
     if not html:
-        return imoveis
+        return imoveis, diagnosticos
 
-    links_encontrados = set(link_padrao.findall(html))
-    for link in links_encontrados:
-        slug = link.rstrip("/").rsplit("/", 1)[-1]
-        if slug.startswith("id-"):
-            # pega o penúltimo segmento, que carrega os dados
-            partes = link.rstrip("/").split("/")
-            slug = partes[-2] if len(partes) >= 2 else slug
+    links_brutos = set(link_padrao.findall(html))
+    for link_bruto in links_brutos:
+        link = _limpar_link(link_bruto)
+        partes = link.rstrip("/").split("/")
+        slug = partes[-2] if len(partes) >= 2 and partes[-1].startswith("id-") else partes[-1]
 
         preco_match = re.search(r"RS(\d+)", link)
         preco = float(preco_match.group(1)) if preco_match else None
@@ -282,17 +342,19 @@ def buscar_chavesnamao(cidade: str, uf: str, max_paginas: int = 1) -> List[Imove
             )
         )
 
-    return imoveis
+    diagnosticos[-1] += f" — {len(links_brutos)} links de imóveis encontrados"
+    return imoveis, diagnosticos
 
 
 # ---------------------------------------------------------------------------
 # ZAP Imóveis — janela de texto ao redor do link no HTML bruto
 # ---------------------------------------------------------------------------
 
-def buscar_zap(cidade: str, uf: str, max_paginas: int = 3) -> List[Imovel]:
+def buscar_zap(cidade: str, uf: str, max_paginas: int = 3) -> Tuple[List[Imovel], List[str]]:
     slug_cidade = _slug_cidade(cidade)
     slug_uf = uf.lower()
     imoveis: List[Imovel] = []
+    diagnosticos: List[str] = []
 
     link_padrao = re.compile(
         r'href="(https://www\.zapimoveis\.com\.br/(?:imovel|lancamentos)/[^"]+)"'
@@ -304,12 +366,14 @@ def buscar_zap(cidade: str, uf: str, max_paginas: int = 3) -> List[Imovel]:
         else:
             url = f"https://www.zapimoveis.com.br/venda/imoveis/{slug_uf}+{slug_cidade}/?pagina={pagina}"
 
-        html = _buscar_pagina(url)
+        html, diag = _buscar_pagina(url)
+        diagnosticos.append(diag)
         if not html:
             continue
 
+        encontrados_nesta_pagina = 0
         for m in link_padrao.finditer(html):
-            link = m.group(1)
+            link = _limpar_link(m.group(1))
             janela = _janela_ao_redor(html, m.start(), m.end())
 
             preco = _extrair_preco_de_texto(janela)
@@ -334,25 +398,28 @@ def buscar_zap(cidade: str, uf: str, max_paginas: int = 3) -> List[Imovel]:
                     dados_incompletos=incompleto,
                 )
             )
+            encontrados_nesta_pagina += 1
 
-    # remove duplicados pelo link, mantendo o primeiro
+        diagnosticos[-1] += f" — {encontrados_nesta_pagina} links de imóveis encontrados nesta página"
+
     vistos = set()
     unicos = []
     for im in imoveis:
         if im.link not in vistos:
             vistos.add(im.link)
             unicos.append(im)
-    return unicos
+    return unicos, diagnosticos
 
 
 # ---------------------------------------------------------------------------
 # Imovelweb — janela de texto ao redor do link no HTML bruto
 # ---------------------------------------------------------------------------
 
-def buscar_imovelweb(cidade: str, uf: str, max_paginas: int = 3) -> List[Imovel]:
+def buscar_imovelweb(cidade: str, uf: str, max_paginas: int = 3) -> Tuple[List[Imovel], List[str]]:
     slug_cidade = _slug_cidade(cidade)
     slug_uf = uf.lower()
     imoveis: List[Imovel] = []
+    diagnosticos: List[str] = []
 
     link_padrao = re.compile(
         r'href="(https://www\.imovelweb\.com\.br/propriedades/[^"]+\.html)"'
@@ -367,12 +434,14 @@ def buscar_imovelweb(cidade: str, uf: str, max_paginas: int = 3) -> List[Imovel]
                 f"{slug_uf}-pagina-{pagina}.html"
             )
 
-        html = _buscar_pagina(url)
+        html, diag = _buscar_pagina(url)
+        diagnosticos.append(diag)
         if not html:
             continue
 
+        encontrados_nesta_pagina = 0
         for m in link_padrao.finditer(html):
-            link = m.group(1)
+            link = _limpar_link(m.group(1))
             janela = _janela_ao_redor(html, m.start(), m.end())
 
             preco = _extrair_preco_de_texto(janela)
@@ -397,6 +466,9 @@ def buscar_imovelweb(cidade: str, uf: str, max_paginas: int = 3) -> List[Imovel]
                     dados_incompletos=incompleto,
                 )
             )
+            encontrados_nesta_pagina += 1
+
+        diagnosticos[-1] += f" — {encontrados_nesta_pagina} links de imóveis encontrados nesta página"
 
     vistos = set()
     unicos = []
@@ -404,7 +476,7 @@ def buscar_imovelweb(cidade: str, uf: str, max_paginas: int = 3) -> List[Imovel]
         if im.link not in vistos:
             vistos.add(im.link)
             unicos.append(im)
-    return unicos
+    return unicos, diagnosticos
 
 
 # ---------------------------------------------------------------------------
@@ -421,10 +493,12 @@ def buscar_todos_portais(
     preco_min: Optional[float] = None,
     preco_max: Optional[float] = None,
 ) -> dict:
-    """Roda os 4 scrapers e devolve um dicionário com resultados por portal
-    mais uma lista combinada, já filtrada."""
+    """Roda os 4 scrapers e devolve um dicionário com resultados por portal,
+    lista combinada já filtrada, e um diagnóstico técnico por portal (o que
+    aconteceu em cada página buscada — sucesso, bloqueio, erro etc.)."""
 
     resultados_por_portal = {}
+    diagnosticos_por_portal = {}
     erros = {}
 
     buscadores = {
@@ -438,19 +512,26 @@ def buscar_todos_portais(
 
     for nome, funcao in buscadores.items():
         try:
-            imoveis = funcao(cidade, uf)
+            imoveis, diagnosticos = funcao(cidade, uf)
             imoveis_filtrados = _aplica_filtros_basicos(
                 imoveis, tipo, quartos_min, banheiros_min, area_min, preco_min, preco_max
             )
             resultados_por_portal[nome] = [im.to_dict() for im in imoveis_filtrados]
+            diagnosticos_por_portal[nome] = diagnosticos
             todos.extend(imoveis_filtrados)
+
+            if len(imoveis) == 0:
+                erros[nome] = "; ".join(diagnosticos) if diagnosticos else "sem detalhes"
+
         except Exception as exc:  # nunca deixar 1 portal quebrar os outros
             logger.exception("Erro ao buscar no portal %s", nome)
             resultados_por_portal[nome] = []
+            diagnosticos_por_portal[nome] = [f"Erro inesperado: {exc}"]
             erros[nome] = str(exc)
 
     return {
         "resultados_por_portal": resultados_por_portal,
+        "diagnosticos_por_portal": diagnosticos_por_portal,
         "todos": [im.to_dict() for im in todos],
         "erros": erros,
         "total": len(todos),
