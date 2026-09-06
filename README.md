@@ -111,7 +111,39 @@ destas situações:
   verdade — é só me enviar esse texto que ajusto o padrão de busca com
   precisão, sem mais tentativa e erro.
 
-## Status atual (Playwright — navegador automatizado real)
+## Status atual (correção do "Internal Server Error")
+
+Depois de ativar o Playwright, a busca chegou a mostrar uma tela genérica de
+**"Internal Server Error"** depois de um tempo longo. A causa mais provável:
+o Render tem um limite de tempo por requisição (por volta de 100 segundos)
+que é aplicado *independente* da configuração do servidor — e a busca,
+somando várias páginas de vários portais tentando o navegador automatizado
+uma de cada vez, pode ter ultrapassado esse tempo.
+
+Duas mudanças foram feitas para reduzir esse risco:
+
+1. **Menos páginas por busca**: VivaReal, ZAP e Imovelweb agora buscam só a
+   1ª página (antes eram 3). Isso reduz a cobertura de cada busca, mas
+   aumenta muito a chance de ela terminar dentro do tempo permitido. Se
+   quiser tentar mais páginas no futuro (arriscando mais timeouts), dá para
+   ajustar isso no código (`scrapers.py`, parâmetro `max_paginas`).
+
+2. **Página de erro com detalhes**: se mesmo assim algo inesperado
+   acontecer no servidor durante a busca (erro de memória, travamento do
+   navegador automatizado, etc.), agora aparece uma tela explicando que deu
+   erro, com o texto técnico do problema — em vez da tela genérica e muda
+   de antes. Se isso acontecer, copie o texto do erro e envie para ajuste.
+
+### Se a busca ainda demorar demais ou continuar dando erro
+
+Isso confirmaria que mesmo 1 página por portal, usando o navegador
+automatizado, não cabe no tempo/memória do plano gratuito do Render. Nesse
+ponto, as opções realistas passam a ser: (a) reduzir ainda mais o escopo
+(por exemplo, tentar o navegador automatizado só no Chaves na Mão, que é o
+único sem bloqueio HTTP explícito), ou (b) migrar para um serviço pago de
+scraping ou um plano pago do Render com mais recursos.
+
+## Status anterior (Playwright — navegador automatizado real)
 
 Depois de confirmar que os 4 portais bloqueiam (ou disfarçam o conteúdo para)
 pedidos HTTP simples, mesmo com cloudscraper, a busca agora usa como último

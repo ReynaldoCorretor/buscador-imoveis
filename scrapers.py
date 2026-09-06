@@ -63,7 +63,7 @@ HEADERS = {
     "Cache-Control": "max-age=0",
 }
 
-REQUEST_TIMEOUT = 15
+REQUEST_TIMEOUT = 8
 MAX_PAGINAS_PADRAO = {
     "vivareal": 3,
     "zap": 3,
@@ -205,9 +205,9 @@ def _buscar_pagina_playwright(url: str) -> Tuple[Optional[str], str]:
                         rota.continue_()
 
                 pagina.route("**/*", _bloquear_recursos_pesados)
-                pagina.goto(url, wait_until="domcontentloaded", timeout=15000)
+                pagina.goto(url, wait_until="domcontentloaded", timeout=12000)
                 # Dá um tempo para conteúdo carregado via JavaScript aparecer
-                pagina.wait_for_timeout(2000)
+                pagina.wait_for_timeout(1500)
                 html = pagina.content()
             finally:
                 navegador.close()
@@ -357,7 +357,7 @@ def _aplica_filtros_basicos(
 # VivaReal — dados extraídos direto do slug da URL
 # ---------------------------------------------------------------------------
 
-def buscar_vivareal(cidade: str, uf: str, max_paginas: int = 3) -> Tuple[List[Imovel], List[str]]:
+def buscar_vivareal(cidade: str, uf: str, max_paginas: int = 1) -> Tuple[List[Imovel], List[str]]:
     slug_cidade = _slug_cidade(cidade)
     slug_uf = uf.lower()
     imoveis: List[Imovel] = []
@@ -500,7 +500,7 @@ def buscar_chavesnamao(cidade: str, uf: str, max_paginas: int = 1) -> Tuple[List
 # ZAP Imóveis — janela de texto ao redor do link no HTML bruto
 # ---------------------------------------------------------------------------
 
-def buscar_zap(cidade: str, uf: str, max_paginas: int = 3) -> Tuple[List[Imovel], List[str]]:
+def buscar_zap(cidade: str, uf: str, max_paginas: int = 1) -> Tuple[List[Imovel], List[str]]:
     slug_cidade = _slug_cidade(cidade)
     slug_uf = uf.lower()
     imoveis: List[Imovel] = []
@@ -568,7 +568,7 @@ def buscar_zap(cidade: str, uf: str, max_paginas: int = 3) -> Tuple[List[Imovel]
 # Imovelweb — janela de texto ao redor do link no HTML bruto
 # ---------------------------------------------------------------------------
 
-def buscar_imovelweb(cidade: str, uf: str, max_paginas: int = 3) -> Tuple[List[Imovel], List[str]]:
+def buscar_imovelweb(cidade: str, uf: str, max_paginas: int = 1) -> Tuple[List[Imovel], List[str]]:
     slug_cidade = _slug_cidade(cidade)
     slug_uf = uf.lower()
     imoveis: List[Imovel] = []
