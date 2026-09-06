@@ -8,3 +8,12 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.0
+      # Corrige um problema conhecido do Render com Playwright: por padrão,
+      # o navegador é baixado numa pasta de cache (~/.cache/ms-playwright)
+      # que fica FORA da pasta do projeto e não é preservada entre a etapa
+      # de build e a etapa de execução do Render — por isso o navegador
+      # "sumia" e dava erro "Executable doesn't exist". Com esta variável,
+      # o navegador é instalado dentro da própria pasta do projeto, que é
+      # preservada.
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "0"

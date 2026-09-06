@@ -312,49 +312,62 @@ class TestBuscarTodosPortais(unittest.TestCase):
     @patch("scrapers.buscar_imovelweb")
     @patch("scrapers.buscar_zap")
     @patch("scrapers.buscar_vivareal")
-    def test_um_portal_falhando_nao_derruba_os_outros(
+    def test_portais_desativados_nao_sao_chamados(
         self, mock_vr, mock_zap, mock_iw, mock_cnm
     ):
-        mock_vr.side_effect = Exception("Falha simulada no VivaReal")
-        mock_zap.return_value = (
-            [scrapers.Imovel(portal="ZAP Imóveis", titulo="Casa", link="z1", preco=300000)],
-            ["https://zap... -> HTTP 200 OK — 1 links de imóveis encontrados nesta página"],
+        """Por padrão, só o Chaves na Mão está ativo (PORTAIS_ATIVOS). Os
+        outros 3 (bloqueio confirmado) não devem nem ser chamados — isso
+        economiza tempo e evita esgotar o limite de requisição do Render."""
+        mock_cnm.return_value = (
+            [scrapers.Imovel(portal="Chaves na Mão", titulo="Casa", link="c1", preco=300000)],
+            ["https://chavesnamao... -> HTTP 200 OK — 1 links de imóveis encontrados"],
         )
-        mock_iw.return_value = ([], ["https://imovelweb... -> HTTP 403 (bloqueio)"])
-        mock_cnm.return_value = ([], ["https://chavesnamao... -> HTTP 200 OK — 0 links"])
 
         resultado = scrapers.buscar_todos_portais("Mogi das Cruzes", "SP")
 
-        self.assertIn("VivaReal", resultado["erros"])
-        self.assertIn("Imovelweb", resultado["erros"])
-        self.assertEqual(resultado["resultados_por_portal"]["VivaReal"], [])
-        self.assertEqual(len(resultado["resultados_por_portal"]["ZAP Imóveis"]), 1)
+        mock_vr.assert_not_called()
+        mock_zap.assert_not_called()
+        mock_iw.assert_not_called()
+        mock_cnm.assert_called_once()
+
         self.assertEqual(resultado["total"], 1)
-        self.assertIn("diagnosticos_por_portal", resultado)
-        self.assertIn("ZAP Imóveis", resultado["diagnosticos_por_portal"])
+        self.assertNotIn("VivaReal", resultado["erros"])  # desativado ≠ erro
+        self.assertIn("desativado", resultado["diagnosticos_por_portal"]["VivaReal"][0])
+        self.assertIn("desativado", resultado["diagnosticos_por_portal"]["ZAP Imóveis"][0])
+        self.assertIn("desativado", resultado["diagnosticos_por_portal"]["Imovelweb"][0])
 
     @patch("scrapers.buscar_chavesnamao")
-    @patch("scrapers.buscar_imovelweb")
-    @patch("scrapers.buscar_zap")
-    @patch("scrapers.buscar_vivareal")
-    def test_todos_portais_bloqueados_gera_diagnostico_claro(
-        self, mock_vr, mock_zap, mock_iw, mock_cnm
-    ):
-        """Simula o cenário relatado pelo usuário: 0 imóveis encontrados em
-        todos os portais. O diagnóstico deve deixar claro que houve
-        bloqueio, em vez de simplesmente devolver uma lista vazia muda."""
-        resposta_bloqueio = ([], ["https://portal... -> HTTP 403 (provável bloqueio antirrobô)"])
-        mock_vr.return_value = resposta_bloqueio
-        mock_zap.return_value = resposta_bloqueio
-        mock_iw.return_value = resposta_bloqueio
-        mock_cnm.return_value = resposta_bloqueio
+    def test_chaves_na_mao_bloqueado_gera_diagnostico_claro(self, mock_cnm):
+        """Simula o cenário relatado pelo usuário: mesmo o único portal
+        ativo (Chaves na Mão) volta bloqueado. O diagnóstico deve deixar
+        isso claro, não apenas devolver uma lista vazia muda."""
+        mock_cnm.return_value = (
+            [], ["https://chavesnamao... -> HTTP 403 (provável bloqueio antirrobô)"]
+        )
 
         resultado = scrapers.buscar_todos_portais("Mogi das Cruzes", "SP")
 
         self.assertEqual(resultado["total"], 0)
-        self.assertEqual(len(resultado["erros"]), 4)
-        for nome, motivo in resultado["erros"].items():
-            self.assertIn("403", motivo)
+        self.assertIn("Chaves na Mão", resultado["erros"])
+        self.assertIn("403", resultado["erros"]["Chaves na Mão"])
+
+    @patch("scrapers.buscar_chavesnamao")
+    @patch("scrapers.buscar_vivareal")
+    def test_reativar_um_portal_manualmente(self, mock_vr, mock_cnm):
+        """Confirma que o interruptor PORTAIS_ATIVOS realmente controla
+        quem é chamado — reativando o VivaReal temporariamente só para
+        este teste, sem afetar o padrão dos outros testes."""
+        mock_vr.return_value = (
+            [scrapers.Imovel(portal="VivaReal", titulo="Casa", link="v1", preco=400000)],
+            ["https://vivareal... -> HTTP 200 OK — 1 links de imóveis encontrados"],
+        )
+        mock_cnm.return_value = ([], ["https://chavesnamao... -> HTTP 403 (bloqueio)"])
+
+        with patch.dict(scrapers.PORTAIS_ATIVOS, {"VivaReal": True}):
+            resultado = scrapers.buscar_todos_portais("Mogi das Cruzes", "SP")
+
+        mock_vr.assert_called_once()
+        self.assertEqual(len(resultado["resultados_por_portal"]["VivaReal"]), 1)
 
 
 if __name__ == "__main__":

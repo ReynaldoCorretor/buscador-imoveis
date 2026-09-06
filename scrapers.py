@@ -636,8 +636,27 @@ def buscar_imovelweb(cidade: str, uf: str, max_paginas: int = 1) -> Tuple[List[I
 
 
 # ---------------------------------------------------------------------------
-# Função principal: roda os 4 portais e aplica filtros
+# Função principal: roda os portais ATIVOS e aplica filtros
 # ---------------------------------------------------------------------------
+
+# Depois de confirmar bloqueio real (HTTP 403 persistente, mesmo com
+# cloudscraper e Playwright) em VivaReal, ZAP Imóveis e Imovelweb, esses 3
+# portais foram temporariamente desativados por padrão. Insistir neles a
+# cada busca só consome tempo à toa e aumenta o risco de a busca inteira
+# estourar o limite de tempo do Render (causa mais provável do "Internal
+# Server Error" visto anteriormente).
+#
+# O código de cada um continua abaixo, pronto para ser reativado (mudando
+# True/False aqui) se no futuro isso deixar de ser um bloqueio — por
+# exemplo, se um serviço pago de scraping for adotado no lugar de
+# requests/cloudscraper/Playwright.
+PORTAIS_ATIVOS = {
+    "VivaReal": False,
+    "ZAP Imóveis": False,
+    "Imovelweb": False,
+    "Chaves na Mão": True,
+}
+
 
 def buscar_todos_portais(
     cidade: str,
@@ -649,9 +668,11 @@ def buscar_todos_portais(
     preco_min: Optional[float] = None,
     preco_max: Optional[float] = None,
 ) -> dict:
-    """Roda os 4 scrapers e devolve um dicionário com resultados por portal,
-    lista combinada já filtrada, e um diagnóstico técnico por portal (o que
-    aconteceu em cada página buscada — sucesso, bloqueio, erro etc.)."""
+    """Roda os scrapers dos portais ATIVOS (ver PORTAIS_ATIVOS) e devolve um
+    dicionário com resultados por portal, lista combinada já filtrada, e um
+    diagnóstico técnico por portal (o que aconteceu em cada página buscada
+    — sucesso, bloqueio, erro etc., ou "desativado" para os que estão
+    pausados)."""
 
     resultados_por_portal = {}
     diagnosticos_por_portal = {}
@@ -667,6 +688,15 @@ def buscar_todos_portais(
     todos: List[Imovel] = []
 
     for nome, funcao in buscadores.items():
+        if not PORTAIS_ATIVOS.get(nome, True):
+            resultados_por_portal[nome] = []
+            diagnosticos_por_portal[nome] = [
+                "Portal temporariamente desativado (bloqueio antirrobô "
+                "confirmado nas tentativas anteriores) — não foi consultado "
+                "nesta busca, para acelerar e evitar erro de tempo esgotado."
+            ]
+            continue
+
         try:
             imoveis, diagnosticos = funcao(cidade, uf)
             imoveis_filtrados = _aplica_filtros_basicos(

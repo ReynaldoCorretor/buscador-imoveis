@@ -111,7 +111,51 @@ destas situações:
   verdade — é só me enviar esse texto que ajusto o padrão de busca com
   precisão, sem mais tentativa e erro.
 
-## Status atual (correção do "Internal Server Error")
+## Status atual (foco só no Chaves na Mão + correção pendente no Render)
+
+Duas mudanças importantes nesta versão:
+
+### 1. Só o Chaves na Mão é pesquisado por padrão agora
+
+VivaReal, ZAP Imóveis e Imovelweb têm bloqueio antirrobô confirmado (HTTP
+403 persistente, mesmo com `cloudscraper` e com o navegador automatizado).
+Continuar tentando os 3 a cada busca só consumia tempo à toa e aumentava o
+risco de a busca inteira travar por demorar demais (o "Internal Server
+Error" visto antes).
+
+Por isso, esses 3 portais foram **desativados por padrão** (variável
+`PORTAIS_ATIVOS` no topo da função `buscar_todos_portais`, em
+`scrapers.py`). O código deles continua no projeto, pronto para ser
+reativado (bastando trocar `False` por `True` nessa variável) se no futuro
+isso deixar de ser um bloqueio — por exemplo, se um serviço pago de
+scraping for adotado.
+
+### 2. Correção necessária no painel do Render (ação manual sua)
+
+O diagnóstico mostrou `Executable doesn't exist... Playwright was just
+installed or updated` — ou seja, **o navegador Chromium nunca foi
+instalado de verdade no servidor**, mesmo com o `render.yaml` pedindo isso.
+A causa mais provável: se o serviço foi criado pelo assistente **"New Web
+Service"** (em vez de **"Blueprint"**), o Render não relê o `render.yaml`
+depois da criação — ele usa o "Build Command" salvo nas configurações do
+serviço, que ainda deve estar com o comando antigo.
+
+**Para corrigir:**
+1. No painel do Render, abra o serviço → **Settings**.
+2. Procure o campo **Build Command** e troque para:
+   ```
+   pip install -r requirements.txt && playwright install --with-deps chromium
+   ```
+3. Salve e vá em **Manual Deploy → Deploy latest commit** (ou "Clear build
+   cache & deploy" para garantir que instale do zero).
+4. Esse build vai demorar mais que o normal (o Chromium é pesado) — é
+   esperado.
+
+Depois dessa correção, o Chaves na Mão vai finalmente ser testado com o
+navegador de verdade (a tentativa anterior falhou não porque o site
+resistiu ao Playwright, mas porque o Playwright nem chegou a rodar).
+
+## Status anterior (correção do "Internal Server Error")
 
 Depois de ativar o Playwright, a busca chegou a mostrar uma tela genérica de
 **"Internal Server Error"** depois de um tempo longo. A causa mais provável:
