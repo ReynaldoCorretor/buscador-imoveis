@@ -75,6 +75,49 @@ buscador-imoveis/
    "dados incompletos", e você pode conferir esses detalhes clicando no
    anúncio original.
 
+## Status atual (atualizado após 1ª publicação real)
+
+Depois do primeiro deploy, testamos a busca ao vivo e encontramos dois problemas
+diferentes, já corrigidos nesta versão:
+
+1. **Chaves na Mão retornava 0 resultados mesmo com a página carregando (HTTP
+   200)**: o site mudou para usar links relativos (`/imovel/...` em vez de
+   `https://www.chavesnamao.com.br/imovel/...`), e o código só reconhecia links
+   já completos. **Corrigido** — o portal deve voltar a funcionar normalmente.
+
+2. **VivaReal, ZAP Imóveis e Imovelweb bloqueiam o servidor do Render com HTTP
+   403** (proteção antirrobô contra acessos automatizados). Isso não é um bug no
+   código — é uma barreira que esses portais colocam contra qualquer servidor
+   fazendo pedidos automatizados, independente da ferramenta usada. Nesta
+   versão foi adicionada uma tentativa de contorno de baixo custo (biblioteca
+   `cloudscraper`, que resolve desafios simples de proteção estilo Cloudflare),
+   mas **não há garantia de que vá funcionar** — portais desse porte costumam
+   ter proteção mais robusta que isso.
+
+### O que fazer se o bloqueio persistir
+
+Depois de publicar esta versão, faça uma busca e abra o "Diagnóstico técnico"
+no fim da página de resultados:
+
+- Se aparecer `"cloudscraper conseguiu contornar"`: o portal voltou a
+  funcionar, ótimo.
+- Se continuar `"HTTP 403 ... tentativa com cloudscraper também falhou"`: o
+  bloqueio é mais forte do que essa tentativa gratuita consegue resolver. As
+  opções realistas nesse caso, em ordem de custo:
+  1. **Aceitar cobertura parcial**: usar o app só com o Chaves na Mão
+     funcionando de forma confiável (os outros 3 portais continuam tentando,
+     mas podem falhar).
+  2. **Serviço de scraping pago** (ex: ScraperAPI, ZenRows, Scrapfly, Bright
+     Data): esses serviços mantêm infraestrutura própria para contornar
+     proteções antirrobô. Custam a partir de alguns dólares/mês, mas são a
+     forma mais confiável de resolver isso sem mudar a arquitetura do projeto.
+  3. **Navegador automatizado (Playwright/Selenium)**: mais trabalhoso de
+     configurar e mais pesado para rodar (pode não caber no plano gratuito do
+     Render, que tem pouca memória disponível).
+
+Se quiser seguir por uma dessas rotas, é só pedir — cada uma tem implicações
+diferentes de custo e complexidade que vale conversar antes de implementar.
+
 ## Limitações conhecidas
 
 - A busca cobre as primeiras 2-3 páginas de resultados de cada portal

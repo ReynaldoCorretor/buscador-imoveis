@@ -165,9 +165,13 @@ def _janela_ao_redor(html: str, indice_inicio: int, indice_fim: int, tamanho: in
 def _buscar_pagina(url: str) -> Tuple[Optional[str], str]:
     """Busca uma página e devolve (html_ou_None, mensagem_de_diagnostico).
 
-    A mensagem de diagnóstico é sempre preenchida (sucesso ou falha), para
-    que quem chamar essa função possa reportar o que aconteceu, em vez de
-    simplesmente ver "0 resultados" sem saber o motivo.
+    Tenta primeiro uma requisição HTTP normal. Se o portal responder com
+    403/429 (indício de bloqueio antirrobô), tenta uma segunda vez usando
+    a biblioteca cloudscraper, que consegue resolver alguns desafios
+    simples de proteção estilo Cloudflare. Isso NÃO garante superar
+    proteções mais fortes (Akamai, PerimeterX, DataDome etc.) — é uma
+    tentativa de baixo custo antes de precisar de soluções pagas
+    (navegador automatizado ou serviço de proxy/scraping).
     """
     try:
         resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
@@ -181,7 +185,6 @@ def _buscar_pagina(url: str) -> Tuple[Optional[str], str]:
         return None, msg
 
     if resp.status_code == 200:
-        # Uma resposta 200 muito curta costuma indicar página de bloqueio/captcha
         if len(resp.text) < 2000:
             msg = (
                 f"{url} -> HTTP 200, mas conteúdo muito curto "
@@ -193,10 +196,31 @@ def _buscar_pagina(url: str) -> Tuple[Optional[str], str]:
         return resp.text, msg
 
     if resp.status_code in (403, 429):
-        msg = (
-            f"{url} -> HTTP {resp.status_code} "
-            "(provável bloqueio antirrobô do portal para este servidor)"
-        )
+        # Tentativa de contorno com cloudscraper antes de desistir
+        try:
+            import cloudscraper
+
+            scraper = cloudscraper.create_scraper()
+            resp2 = scraper.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+            if resp2.status_code == 200 and len(resp2.text) >= 2000:
+                msg = (
+                    f"{url} -> HTTP {resp.status_code} na 1ª tentativa, mas "
+                    f"cloudscraper conseguiu contornar (HTTP 200, "
+                    f"{len(resp2.text)} caracteres)"
+                )
+                logger.info(msg)
+                return resp2.text, msg
+            msg = (
+                f"{url} -> HTTP {resp.status_code} "
+                "(provável bloqueio antirrobô do portal para este servidor); "
+                f"tentativa com cloudscraper também falhou (HTTP {resp2.status_code})"
+            )
+        except Exception as exc:
+            msg = (
+                f"{url} -> HTTP {resp.status_code} "
+                "(provável bloqueio antirrobô do portal para este servidor); "
+                f"tentativa de contorno com cloudscraper falhou: {exc}"
+            )
         logger.warning(msg)
         return None, msg
 
@@ -243,7 +267,7 @@ def buscar_vivareal(cidade: str, uf: str, max_paginas: int = 3) -> Tuple[List[Im
     diagnosticos: List[str] = []
 
     link_padrao = re.compile(
-        r'href="(https://www\.vivareal\.com\.br/(?:imovel|imoveis-lancamentos)/[^"]+)"'
+        r'href="((?:https://www\.vivareal\.com\.br)?/(?:imovel|imoveis-lancamentos)/[^"]+)"'
     )
 
     for pagina in range(1, max_paginas + 1):
@@ -259,6 +283,8 @@ def buscar_vivareal(cidade: str, uf: str, max_paginas: int = 3) -> Tuple[List[Im
 
         links_brutos = set(link_padrao.findall(html))
         for link_bruto in links_brutos:
+            if link_bruto.startswith("/"):
+                link_bruto = "https://www.vivareal.com.br" + link_bruto
             link = _limpar_link(link_bruto)
             slug = link.rstrip("/").rsplit("/", 1)[-1]
 
@@ -302,8 +328,12 @@ def buscar_chavesnamao(cidade: str, uf: str, max_paginas: int = 1) -> Tuple[List
     imoveis: List[Imovel] = []
     diagnosticos: List[str] = []
 
+    # Correção: os links de anúncio deste portal vêm como caminho relativo
+    # (ex: href="/imovel/casa-...-id-123/"), sem o domínio na frente. O
+    # padrão antigo só reconhecia links já absolutos e por isso não achava
+    # nada, mesmo com a página carregando normalmente (HTTP 200).
     link_padrao = re.compile(
-        r'href="(https://www\.chavesnamao\.com\.br/imovel/[^"]+)"'
+        r'href="((?:https://www\.chavesnamao\.com\.br)?/imovel/[^"]+)"'
     )
 
     url = f"https://www.chavesnamao.com.br/imoveis-a-venda/{slug_uf}-{slug_cidade}/"
@@ -314,6 +344,8 @@ def buscar_chavesnamao(cidade: str, uf: str, max_paginas: int = 1) -> Tuple[List
 
     links_brutos = set(link_padrao.findall(html))
     for link_bruto in links_brutos:
+        if link_bruto.startswith("/"):
+            link_bruto = "https://www.chavesnamao.com.br" + link_bruto
         link = _limpar_link(link_bruto)
         partes = link.rstrip("/").split("/")
         slug = partes[-2] if len(partes) >= 2 and partes[-1].startswith("id-") else partes[-1]
@@ -357,7 +389,7 @@ def buscar_zap(cidade: str, uf: str, max_paginas: int = 3) -> Tuple[List[Imovel]
     diagnosticos: List[str] = []
 
     link_padrao = re.compile(
-        r'href="(https://www\.zapimoveis\.com\.br/(?:imovel|lancamentos)/[^"]+)"'
+        r'href="((?:https://www\.zapimoveis\.com\.br)?/(?:imovel|lancamentos)/[^"]+)"'
     )
 
     for pagina in range(1, max_paginas + 1):
@@ -373,7 +405,10 @@ def buscar_zap(cidade: str, uf: str, max_paginas: int = 3) -> Tuple[List[Imovel]
 
         encontrados_nesta_pagina = 0
         for m in link_padrao.finditer(html):
-            link = _limpar_link(m.group(1))
+            link_bruto = m.group(1)
+            if link_bruto.startswith("/"):
+                link_bruto = "https://www.zapimoveis.com.br" + link_bruto
+            link = _limpar_link(link_bruto)
             janela = _janela_ao_redor(html, m.start(), m.end())
 
             preco = _extrair_preco_de_texto(janela)
@@ -422,7 +457,7 @@ def buscar_imovelweb(cidade: str, uf: str, max_paginas: int = 3) -> Tuple[List[I
     diagnosticos: List[str] = []
 
     link_padrao = re.compile(
-        r'href="(https://www\.imovelweb\.com\.br/propriedades/[^"]+\.html)"'
+        r'href="((?:https://www\.imovelweb\.com\.br)?/propriedades/[^"]+\.html)"'
     )
 
     for pagina in range(1, max_paginas + 1):
@@ -441,7 +476,10 @@ def buscar_imovelweb(cidade: str, uf: str, max_paginas: int = 3) -> Tuple[List[I
 
         encontrados_nesta_pagina = 0
         for m in link_padrao.finditer(html):
-            link = _limpar_link(m.group(1))
+            link_bruto = m.group(1)
+            if link_bruto.startswith("/"):
+                link_bruto = "https://www.imovelweb.com.br" + link_bruto
+            link = _limpar_link(link_bruto)
             janela = _janela_ao_redor(html, m.start(), m.end())
 
             preco = _extrair_preco_de_texto(janela)
