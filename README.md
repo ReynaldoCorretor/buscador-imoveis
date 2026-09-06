@@ -75,7 +75,43 @@ buscador-imoveis/
    "dados incompletos", e você pode conferir esses detalhes clicando no
    anúncio original.
 
-## Status atual (atualizado após 1ª publicação real)
+## Status atual (atualizado após 2ª rodada de testes reais)
+
+Depois da correção anterior (link relativo), o Chaves na Mão continuou
+retornando 0 imóveis. Investigando melhor, percebemos que a ferramenta usada
+para inspecionar o site durante o desenvolvimento processa a página de forma
+diferente do que o código Python real faz no servidor — por isso o formato
+exato do link só pode ser confirmado observando o que o próprio servidor do
+Render recebe de verdade.
+
+Por isso, esta versão faz duas coisas:
+
+1. **Reconhece o link em mais formatos**: além do formato clássico
+   (`href="/imovel/..."`), agora também reconhece o link se ele estiver
+   embutido em dados JSON da página (comum em sites feitos com Next.js/React,
+   com barras "escapadas" tipo `\/imovel\/...`) ou com aspas simples.
+
+2. **Autodiagnóstico mais preciso**: se mesmo assim não encontrar nenhum link,
+   o "Diagnóstico técnico" da página agora mostra um **trecho real do HTML**
+   recebido pelo servidor ao redor da palavra `/imovel/`. Isso permite
+   descobrir o formato exato usado pelo site sem precisar de mais tentativas
+   às cegas.
+
+### Se o Chaves na Mão ainda voltar com 0 resultados
+
+Abra o "Diagnóstico técnico" no fim da página de resultados e copie a
+mensagem completa que aparecer para o Chaves na Mão — ela vai indicar uma
+destas situações:
+
+- **"nenhuma ocorrência de '/imovel/' encontrada"**: o site pode estar
+  bloqueando este servidor de forma parecida com os outros 3 portais, ou
+  mudou completamente a estrutura da URL dos anúncios.
+- **"aparece Nx no HTML, mas não no formato esperado... Trecho real
+  encontrado: ..."**: esse trecho mostra exatamente como o link aparece de
+  verdade — é só me enviar esse texto que ajusto o padrão de busca com
+  precisão, sem mais tentativa e erro.
+
+## Status dos outros 3 portais (VivaReal, ZAP, Imovelweb)
 
 Depois do primeiro deploy, testamos a busca ao vivo e encontramos dois problemas
 diferentes, já corrigidos nesta versão:

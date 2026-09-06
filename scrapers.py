@@ -229,6 +229,31 @@ def _buscar_pagina(url: str) -> Tuple[Optional[str], str]:
     return None, msg
 
 
+def _diagnosticar_ausencia_de_links(html: str, pista: str, tamanho_snippet: int = 250) -> str:
+    """Quando nenhum link de imóvel é encontrado numa página que carregou
+    normalmente (HTTP 200), esta função investiga o HTML bruto em busca de
+    uma pista (ex: '/imovel/') para descobrir o formato real usado pelo
+    site, sem precisar de acesso externo para inspecionar manualmente.
+    Devolve uma mensagem pronta para aparecer no diagnóstico da busca."""
+    ocorrencias = html.count(pista)
+    if ocorrencias == 0:
+        return (
+            f"nenhuma ocorrência de '{pista}' encontrada no HTML recebido "
+            f"({len(html)} caracteres) — o site pode ter mudado a estrutura "
+            "da página, ou está servindo um conteúdo diferente para este servidor"
+        )
+
+    indice = html.find(pista)
+    inicio = max(0, indice - 40)
+    fim = min(len(html), indice + tamanho_snippet)
+    trecho = html[inicio:fim].replace("\n", " ").replace("\t", " ")
+    trecho = re.sub(r"\s+", " ", trecho)
+    return (
+        f"'{pista}' aparece {ocorrencias}x no HTML, mas não no formato "
+        f"esperado pelo padrão de busca. Trecho real encontrado: ...{trecho}..."
+    )
+
+
 def _aplica_filtros_basicos(
     imoveis: List[Imovel],
     tipo: Optional[str],
@@ -328,21 +353,43 @@ def buscar_chavesnamao(cidade: str, uf: str, max_paginas: int = 1) -> Tuple[List
     imoveis: List[Imovel] = []
     diagnosticos: List[str] = []
 
-    # Correção: os links de anúncio deste portal vêm como caminho relativo
-    # (ex: href="/imovel/casa-...-id-123/"), sem o domínio na frente. O
-    # padrão antigo só reconhecia links já absolutos e por isso não achava
-    # nada, mesmo com a página carregando normalmente (HTTP 200).
+    # Tentativa 1: link clássico dentro de href="..." (aspas duplas),
+    # absoluto ou relativo.
     link_padrao = re.compile(
         r'href="((?:https://www\.chavesnamao\.com\.br)?/imovel/[^"]+)"'
+    )
+    # Tentativa 2 (mais ampla): reconhece o formato do link em qualquer
+    # lugar do HTML — inclusive dentro de dados JSON embutidos na página
+    # (comum em sites feitos com Next.js/React), onde as barras podem vir
+    # "escapadas" (\/) e as aspas podem ser simples.
+    link_padrao_amplo = re.compile(
+        r'\\?/imovel\\?/[a-z0-9\-]+\\?/id-\d+\\?/?', re.IGNORECASE
     )
 
     url = f"https://www.chavesnamao.com.br/imoveis-a-venda/{slug_uf}-{slug_cidade}/"
     html, diag = _buscar_pagina(url)
-    diagnosticos.append(diag)
     if not html:
+        diagnosticos.append(diag)
         return imoveis, diagnosticos
 
     links_brutos = set(link_padrao.findall(html))
+    metodo = "padrão href=\"...\""
+
+    if not links_brutos:
+        achados_amplos = set(link_padrao_amplo.findall(html))
+        # findall com grupos vazios devolve strings vazias; refazemos sem
+        # grupos de captura para pegar o trecho inteiro
+        achados_amplos = set(m.group(0) for m in link_padrao_amplo.finditer(html))
+        links_brutos = {trecho.replace("\\/", "/") for trecho in achados_amplos}
+        if links_brutos:
+            metodo = "padrão amplo (formato alternativo/JSON)"
+
+    if links_brutos:
+        diag += f" — {len(links_brutos)} links encontrados ({metodo})"
+    else:
+        diag += " — 0 links encontrados. " + _diagnosticar_ausencia_de_links(html, "/imovel/")
+    diagnosticos.append(diag)
+
     for link_bruto in links_brutos:
         if link_bruto.startswith("/"):
             link_bruto = "https://www.chavesnamao.com.br" + link_bruto
@@ -374,7 +421,6 @@ def buscar_chavesnamao(cidade: str, uf: str, max_paginas: int = 1) -> Tuple[List
             )
         )
 
-    diagnosticos[-1] += f" — {len(links_brutos)} links de imóveis encontrados"
     return imoveis, diagnosticos
 
 

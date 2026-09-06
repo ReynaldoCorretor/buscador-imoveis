@@ -116,6 +116,67 @@ class TestChavesNaMao(unittest.TestCase):
         self.assertEqual(resultado[0].preco, 800000.0)
         self.assertEqual(resultado[0].quartos, 2)
 
+    @patch("scrapers._buscar_pagina")
+    def test_extrai_dados_de_link_relativo(self, mock_buscar):
+        html_relativo = (
+            '<html><body>'
+            '<a href="/imovel/casa-a-venda-2-quartos-com-garagem-sp-mogi-das-cruzes-'
+            'jardim-sao-francisco-RS800000/id-41546364/">Casa</a>'
+            '</body></html>'
+        )
+        mock_buscar.return_value = (html_relativo, "OK")
+        resultado, diagnosticos = scrapers.buscar_chavesnamao("Mogi das Cruzes", "SP")
+        self.assertEqual(len(resultado), 1)
+        self.assertTrue(resultado[0].link.startswith("https://www.chavesnamao.com.br/"))
+        self.assertEqual(resultado[0].preco, 800000.0)
+
+    @patch("scrapers._buscar_pagina")
+    def test_extrai_dados_de_link_embutido_em_json_com_barras_escapadas(self, mock_buscar):
+        # Simula o link aparecendo dentro de um bloco de dados JSON (comum
+        # em sites Next.js/React), com barras escapadas e aspas simples.
+        html_json = (
+            '<html><body><script>'
+            'var dados = {"url": "\\/imovel\\/casa-a-venda-2-quartos-sp-mogi-das-cruzes-'
+            'jardim-sao-francisco-RS800000\\/id-41546364\\/"};'
+            '</script></body></html>'
+        )
+        mock_buscar.return_value = (html_json, "OK")
+        resultado, diagnosticos = scrapers.buscar_chavesnamao("Mogi das Cruzes", "SP")
+        self.assertEqual(len(resultado), 1)
+        self.assertEqual(resultado[0].preco, 800000.0)
+        self.assertIn("padrão amplo", diagnosticos[0])
+
+    @patch("scrapers._buscar_pagina")
+    def test_diagnostico_quando_nao_acha_nenhum_link(self, mock_buscar):
+        html_sem_imoveis = "<html><body><p>Página genérica sem anúncios</p></body></html>"
+        mock_buscar.return_value = (html_sem_imoveis, "HTTP 200 OK (40 caracteres)")
+        resultado, diagnosticos = scrapers.buscar_chavesnamao("Mogi das Cruzes", "SP")
+        self.assertEqual(resultado, [])
+        self.assertIn("nenhuma ocorrência", diagnosticos[0])
+
+    @patch("scrapers._buscar_pagina")
+    def test_diagnostico_mostra_trecho_quando_pista_existe_mas_padrao_nao_bate(self, mock_buscar):
+        html_com_pista_mas_formato_novo = (
+            '<html><body><a data-url="/imovel/algum-formato-totalmente-novo-99999">'
+            "Casa</a></body></html>"
+        )
+        mock_buscar.return_value = (html_com_pista_mas_formato_novo, "HTTP 200 OK")
+        resultado, diagnosticos = scrapers.buscar_chavesnamao("Mogi das Cruzes", "SP")
+        self.assertEqual(resultado, [])
+        self.assertIn("Trecho real encontrado", diagnosticos[0])
+
+
+class TestDiagnosticarAusenciaDeLinks(unittest.TestCase):
+    def test_sem_nenhuma_ocorrencia(self):
+        msg = scrapers._diagnosticar_ausencia_de_links("<html>nada aqui</html>", "/imovel/")
+        self.assertIn("nenhuma ocorrência", msg)
+
+    def test_com_ocorrencia_mostra_trecho(self):
+        html = "<html>" + "x" * 50 + "/imovel/abc-XYZ" + "y" * 50 + "</html>"
+        msg = scrapers._diagnosticar_ausencia_de_links(html, "/imovel/")
+        self.assertIn("aparece 1x", msg)
+        self.assertIn("Trecho real encontrado", msg)
+
 
 class TestZap(unittest.TestCase):
     @patch("scrapers._buscar_pagina")
