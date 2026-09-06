@@ -111,7 +111,59 @@ destas situações:
   verdade — é só me enviar esse texto que ajusto o padrão de busca com
   precisão, sem mais tentativa e erro.
 
-## Status dos outros 3 portais (VivaReal, ZAP, Imovelweb)
+## Status atual (Playwright — navegador automatizado real)
+
+Depois de confirmar que os 4 portais bloqueiam (ou disfarçam o conteúdo para)
+pedidos HTTP simples, mesmo com cloudscraper, a busca agora usa como último
+recurso um **navegador de verdade rodando escondido no servidor**
+(Playwright + Chromium headless), que executa o JavaScript da página como um
+navegador comum executaria. Essa é a tentativa mais forte disponível sem
+recorrer a serviços pagos de scraping.
+
+### Como funciona agora, em camadas (da mais rápida para a mais pesada)
+
+1. Pedido HTTP comum (rápido, ~1 segundo).
+2. Se bloqueado (403/429): tenta `cloudscraper`.
+3. Se ainda assim falhar, OU se a página vier "OK" mas sem nenhum sinal de
+   conteúdo real (o disfarce que vimos no Chaves na Mão): abre um Chromium
+   invisível, carrega a página de verdade e pega o HTML já processado.
+
+### Configuração adicional necessária no Render
+
+Esta versão precisa que o Render instale o navegador Chromium durante o
+build — isso já está configurado no `render.yaml` (`playwright install
+--with-deps chromium`), mas deixa o build mais demorado (pode levar uns
+5-10 minutos a mais na primeira publicação). O `Procfile`/`render.yaml`
+também foram ajustados para dar mais tempo por busca (`--timeout 120`) e
+usar só 1 processo (`--workers 1`), para não estourar a memória disponível
+no plano gratuito.
+
+### ⚠️ Riscos reais desta abordagem (leia antes de usar)
+
+- **Memória**: o plano gratuito do Render tem só 512 MB de RAM. Um
+  navegador Chromium, mesmo "enxuto", consome uma boa parte disso. Pode
+  funcionar bem, mas também pode travar ou reiniciar o serviço em buscas
+  mais pesadas. Se isso acontecer nos logs do Render (erros tipo "Out of
+  memory" ou o serviço reiniciando sozinho), o próximo passo realista é
+  migrar para um plano pago do Render com mais memória.
+- **Lentidão**: abrir um navegador de verdade para cada página é bem mais
+  lento que um pedido HTTP comum. A busca pode demorar bem mais que antes,
+  principalmente se vários portais precisarem cair para essa camada ao
+  mesmo tempo.
+- **Sem garantia total**: proteções antirrobô mais fortes (Akamai,
+  PerimeterX, DataDome) conseguem detectar navegadores automatizados
+  mesmo assim. Esta é a tentativa mais robusta possível sem custo
+  financeiro, mas "sem custo" não é sinônimo de "infalível".
+
+### Se mesmo com Playwright continuar bloqueado
+
+Abra o "Diagnóstico técnico" no fim da página de resultados. Se aparecer
+`"Playwright falhou"` ou `"Playwright também falhou"` para os 4 portais,
+significa que a proteção deles é mais forte do que essa tentativa
+consegue superar — nesse caso, as opções que sobram são um serviço pago de
+scraping (mais confiável, com custo mensal) ou aceitar cobertura parcial.
+
+## Status dos 3 portais bloqueados originalmente (VivaReal, ZAP, Imovelweb)
 
 Depois do primeiro deploy, testamos a busca ao vivo e encontramos dois problemas
 diferentes, já corrigidos nesta versão:
@@ -206,7 +258,11 @@ se cada parser está extraindo os dados corretamente.
 
 ```bash
 pip install -r requirements.txt
+playwright install chromium
 python app.py
 ```
 
 Depois acesse `http://localhost:5000` no navegador.
+
+**Nota**: o comando `playwright install chromium` baixa o navegador usado
+como último recurso para superar bloqueios. Só precisa ser rodado uma vez.

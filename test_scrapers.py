@@ -54,7 +54,7 @@ HTML_VAZIO = "<html><body><p>Nenhum resultado</p></body></html>"
 def _mock_buscar_pagina_sequencia(respostas):
     """Ajuda a simular _buscar_pagina devolvendo (html, diagnostico) para
     cada chamada em sequência."""
-    def _fake(url):
+    def _fake(url, marcador_de_conteudo=None):
         html = respostas.pop(0) if respostas else None
         diag = f"{url} -> " + ("OK" if html else "HTTP 403 (simulado)")
         return html, diag
@@ -164,6 +164,72 @@ class TestChavesNaMao(unittest.TestCase):
         resultado, diagnosticos = scrapers.buscar_chavesnamao("Mogi das Cruzes", "SP")
         self.assertEqual(resultado, [])
         self.assertIn("Trecho real encontrado", diagnosticos[0])
+
+
+class TestBuscarPaginaComCamadas(unittest.TestCase):
+    """Testa a lógica de 3 camadas de _buscar_pagina: requests normal ->
+    cloudscraper (em caso de 403/429) -> Playwright (último recurso, ou
+    quando o conteúdo vem sem o marcador esperado)."""
+
+    @patch("requests.get")
+    def test_sucesso_direto_nao_aciona_playwright(self, mock_get):
+        resposta = unittest.mock.Mock(status_code=200, text="x" * 3000 + "/imovel/abc")
+        mock_get.return_value = resposta
+        with patch("scrapers._buscar_pagina_playwright") as mock_pw:
+            html, diag = scrapers._buscar_pagina("http://x", marcador_de_conteudo="/imovel/")
+            mock_pw.assert_not_called()
+        self.assertIsNotNone(html)
+        self.assertIn("HTTP 200 OK", diag)
+
+    @patch("scrapers._buscar_pagina_playwright")
+    @patch("requests.get")
+    def test_conteudo_sem_marcador_aciona_playwright(self, mock_get, mock_pw):
+        # HTTP 200 "vazio" (sem o marcador esperado) -> deve tentar Playwright
+        resposta = unittest.mock.Mock(status_code=200, text="x" * 3000)
+        mock_get.return_value = resposta
+        mock_pw.return_value = ("y" * 3000 + "/imovel/real", "http://x -> Playwright OK")
+
+        html, diag = scrapers._buscar_pagina("http://x", marcador_de_conteudo="/imovel/")
+
+        mock_pw.assert_called_once()
+        self.assertIsNotNone(html)
+        self.assertIn("/imovel/real", html)
+        self.assertIn("Playwright", diag)
+
+    @patch("scrapers._buscar_pagina_playwright")
+    @patch("requests.get")
+    def test_403_aciona_playwright_quando_cloudscraper_nao_resolve(self, mock_get, mock_pw):
+        resposta_bloqueada = unittest.mock.Mock(status_code=403, text="bloqueado")
+        mock_get.return_value = resposta_bloqueada
+        mock_pw.return_value = (None, "http://x -> Playwright falhou: timeout")
+
+        html, diag = scrapers._buscar_pagina("http://x", marcador_de_conteudo="/imovel/")
+
+        mock_pw.assert_called_once()
+        self.assertIsNone(html)
+        self.assertIn("403", diag)
+        self.assertIn("Playwright também falhou", diag)
+
+    @patch("scrapers._buscar_pagina_playwright")
+    @patch("requests.get")
+    def test_403_resolvido_pelo_playwright(self, mock_get, mock_pw):
+        resposta_bloqueada = unittest.mock.Mock(status_code=403, text="bloqueado")
+        mock_get.return_value = resposta_bloqueada
+        mock_pw.return_value = ("z" * 3000 + "/imovel/ok", "http://x -> Playwright OK")
+
+        html, diag = scrapers._buscar_pagina("http://x", marcador_de_conteudo="/imovel/")
+
+        self.assertIsNotNone(html)
+        self.assertIn("/imovel/ok", html)
+        self.assertIn("Playwright (navegador real) conseguiu obter os dados", diag)
+
+    def test_playwright_nao_instalado_nao_quebra(self):
+        # Se a biblioteca playwright não estiver instalada no ambiente, a
+        # busca deve reportar isso no diagnóstico em vez de travar com erro.
+        html, diag = scrapers._buscar_pagina_playwright("http://x")
+        # Neste ambiente de teste o pacote pode ou não estar instalado —
+        # o importante é que a função NUNCA lance uma exceção não tratada.
+        self.assertIsInstance(diag, str)
 
 
 class TestDiagnosticarAusenciaDeLinks(unittest.TestCase):

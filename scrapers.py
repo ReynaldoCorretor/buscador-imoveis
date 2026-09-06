@@ -162,69 +162,141 @@ def _janela_ao_redor(html: str, indice_inicio: int, indice_fim: int, tamanho: in
     return html[inicio:fim]
 
 
-def _buscar_pagina(url: str) -> Tuple[Optional[str], str]:
+def _buscar_pagina_playwright(url: str) -> Tuple[Optional[str], str]:
+    """Busca uma página usando um navegador de verdade (headless), via
+    Playwright. Isso executa o JavaScript da página como um navegador
+    normal faria — necessário para portais que só entregam o conteúdo real
+    depois de carregar dados via JavaScript, ou que servem uma página
+    "vazia" de propósito para pedidos que reconhecem como automatizados
+    (requests/cloudscraper não executam JavaScript, então não conseguem
+    superar essa barreira).
+
+    Mais lento e pesado que um pedido HTTP comum — por isso só é usado como
+    último recurso, depois que a tentativa rápida (requests/cloudscraper)
+    falhou ou voltou sem conteúdo de verdade.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        msg = f"{url} -> Playwright não está instalado neste ambiente ({exc})"
+        logger.warning(msg)
+        return None, msg
+
+    try:
+        with sync_playwright() as p:
+            navegador = p.chromium.launch(
+                headless=True,
+                args=["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            try:
+                contexto = navegador.new_context(
+                    user_agent=HEADERS["User-Agent"],
+                    locale="pt-BR",
+                    viewport={"width": 1280, "height": 800},
+                )
+                pagina = contexto.new_page()
+
+                # Bloqueia imagens/fontes/mídia para economizar memória e
+                # tempo — não precisamos do visual, só do HTML com os dados.
+                def _bloquear_recursos_pesados(rota):
+                    if rota.request.resource_type in ("image", "media", "font"):
+                        rota.abort()
+                    else:
+                        rota.continue_()
+
+                pagina.route("**/*", _bloquear_recursos_pesados)
+                pagina.goto(url, wait_until="domcontentloaded", timeout=15000)
+                # Dá um tempo para conteúdo carregado via JavaScript aparecer
+                pagina.wait_for_timeout(2000)
+                html = pagina.content()
+            finally:
+                navegador.close()
+
+        msg = f"{url} -> Playwright (navegador real) OK ({len(html)} caracteres)"
+        logger.info(msg)
+        return html, msg
+    except Exception as exc:
+        msg = f"{url} -> Playwright falhou: {exc}"
+        logger.warning(msg)
+        return None, msg
+
+
+def _buscar_pagina(url: str, marcador_de_conteudo: Optional[str] = None) -> Tuple[Optional[str], str]:
     """Busca uma página e devolve (html_ou_None, mensagem_de_diagnostico).
 
-    Tenta primeiro uma requisição HTTP normal. Se o portal responder com
-    403/429 (indício de bloqueio antirrobô), tenta uma segunda vez usando
-    a biblioteca cloudscraper, que consegue resolver alguns desafios
-    simples de proteção estilo Cloudflare. Isso NÃO garante superar
-    proteções mais fortes (Akamai, PerimeterX, DataDome etc.) — é uma
-    tentativa de baixo custo antes de precisar de soluções pagas
-    (navegador automatizado ou serviço de proxy/scraping).
+    Estratégia em 3 camadas, da mais rápida/barata para a mais pesada:
+    1. Requisição HTTP normal (requests).
+    2. Se vier 403/429: tenta cloudscraper (contorna proteções simples
+       estilo Cloudflare, sem executar JavaScript de verdade).
+    3. Se ainda assim falhar, OU se a página vier com HTTP 200 mas sem o
+       "marcador_de_conteudo" esperado (indício de que o site entregou uma
+       página "vazia" de propósito, sem executar JavaScript para os dados
+       reais), tenta um navegador automatizado de verdade via Playwright.
+
+    O parâmetro marcador_de_conteudo é uma pista textual (ex: "/imovel/")
+    que DEVE aparecer no HTML quando a página tem conteúdo de verdade. Sem
+    isso, não temos como distinguir "página vazia disfarçada de sucesso"
+    de "página realmente sem resultados para esta busca".
     """
+
+    def _tem_marcador(html: str) -> bool:
+        return marcador_de_conteudo is None or marcador_de_conteudo in html
+
     try:
         resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
     except requests.Timeout:
-        msg = f"{url} -> tempo esgotado (timeout) após {REQUEST_TIMEOUT}s"
-        logger.warning(msg)
-        return None, msg
+        msg_falha = f"{url} -> tempo esgotado (timeout) após {REQUEST_TIMEOUT}s"
+        logger.warning(msg_falha)
+        html_pw, msg_pw = _buscar_pagina_playwright(url)
+        if html_pw and _tem_marcador(html_pw):
+            return html_pw, f"{msg_falha}; {msg_pw}"
+        return None, f"{msg_falha}; tentativa com Playwright também falhou ({msg_pw})"
     except requests.RequestException as exc:
-        msg = f"{url} -> erro de conexão: {exc}"
-        logger.warning(msg)
-        return None, msg
+        msg_falha = f"{url} -> erro de conexão: {exc}"
+        logger.warning(msg_falha)
+        html_pw, msg_pw = _buscar_pagina_playwright(url)
+        if html_pw and _tem_marcador(html_pw):
+            return html_pw, f"{msg_falha}; {msg_pw}"
+        return None, f"{msg_falha}; tentativa com Playwright também falhou ({msg_pw})"
 
-    if resp.status_code == 200:
-        if len(resp.text) < 2000:
-            msg = (
-                f"{url} -> HTTP 200, mas conteúdo muito curto "
-                f"({len(resp.text)} caracteres) — pode ser página de bloqueio/captcha"
-            )
-            logger.warning(msg)
-            return resp.text, msg
+    if resp.status_code == 200 and len(resp.text) >= 2000 and _tem_marcador(resp.text):
         msg = f"{url} -> HTTP 200 OK ({len(resp.text)} caracteres)"
         return resp.text, msg
 
+    # Chegou aqui: ou deu 403/429, ou HTTP 200 mas curto/sem o marcador
+    # esperado (provável página "vazia" disfarçada). Em ambos os casos,
+    # vale tentar as camadas seguintes.
+    if resp.status_code == 200:
+        motivo_inicial = (
+            f"HTTP 200, mas conteúdo sem o marcador esperado "
+            f"({len(resp.text)} caracteres) — provável conteúdo disfarçado/vazio"
+        )
+    else:
+        motivo_inicial = f"HTTP {resp.status_code} (provável bloqueio antirrobô do portal para este servidor)"
+
+    # Camada 2: cloudscraper (só faz sentido tentar em caso de bloqueio
+    # HTTP explícito; se já veio 200 "vazio", pular direto pro Playwright)
     if resp.status_code in (403, 429):
-        # Tentativa de contorno com cloudscraper antes de desistir
         try:
             import cloudscraper
 
             scraper = cloudscraper.create_scraper()
             resp2 = scraper.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-            if resp2.status_code == 200 and len(resp2.text) >= 2000:
-                msg = (
-                    f"{url} -> HTTP {resp.status_code} na 1ª tentativa, mas "
-                    f"cloudscraper conseguiu contornar (HTTP 200, "
-                    f"{len(resp2.text)} caracteres)"
-                )
+            if resp2.status_code == 200 and len(resp2.text) >= 2000 and _tem_marcador(resp2.text):
+                msg = f"{url} -> {motivo_inicial}; cloudscraper conseguiu contornar (HTTP 200, {len(resp2.text)} caracteres)"
                 logger.info(msg)
                 return resp2.text, msg
-            msg = (
-                f"{url} -> HTTP {resp.status_code} "
-                "(provável bloqueio antirrobô do portal para este servidor); "
-                f"tentativa com cloudscraper também falhou (HTTP {resp2.status_code})"
-            )
-        except Exception as exc:
-            msg = (
-                f"{url} -> HTTP {resp.status_code} "
-                "(provável bloqueio antirrobô do portal para este servidor); "
-                f"tentativa de contorno com cloudscraper falhou: {exc}"
-            )
-        logger.warning(msg)
-        return None, msg
+        except Exception:
+            pass  # segue para a camada 3 (Playwright)
 
-    msg = f"{url} -> HTTP {resp.status_code}"
+    # Camada 3: navegador automatizado de verdade
+    html_pw, msg_pw = _buscar_pagina_playwright(url)
+    if html_pw and _tem_marcador(html_pw):
+        msg = f"{url} -> {motivo_inicial}; Playwright (navegador real) conseguiu obter os dados ({len(html_pw)} caracteres)"
+        logger.info(msg)
+        return html_pw, msg
+
+    msg = f"{url} -> {motivo_inicial}; tentativa com Playwright também falhou ({msg_pw})"
     logger.warning(msg)
     return None, msg
 
@@ -301,7 +373,7 @@ def buscar_vivareal(cidade: str, uf: str, max_paginas: int = 3) -> Tuple[List[Im
         else:
             url = f"https://www.vivareal.com.br/venda/{slug_uf}/{slug_cidade}/?pagina={pagina}"
 
-        html, diag = _buscar_pagina(url)
+        html, diag = _buscar_pagina(url, marcador_de_conteudo="/imovel/")
         diagnosticos.append(diag)
         if not html:
             continue
@@ -367,7 +439,7 @@ def buscar_chavesnamao(cidade: str, uf: str, max_paginas: int = 1) -> Tuple[List
     )
 
     url = f"https://www.chavesnamao.com.br/imoveis-a-venda/{slug_uf}-{slug_cidade}/"
-    html, diag = _buscar_pagina(url)
+    html, diag = _buscar_pagina(url, marcador_de_conteudo="/imovel/")
     if not html:
         diagnosticos.append(diag)
         return imoveis, diagnosticos
@@ -444,7 +516,7 @@ def buscar_zap(cidade: str, uf: str, max_paginas: int = 3) -> Tuple[List[Imovel]
         else:
             url = f"https://www.zapimoveis.com.br/venda/imoveis/{slug_uf}+{slug_cidade}/?pagina={pagina}"
 
-        html, diag = _buscar_pagina(url)
+        html, diag = _buscar_pagina(url, marcador_de_conteudo="/imovel/")
         diagnosticos.append(diag)
         if not html:
             continue
@@ -515,7 +587,7 @@ def buscar_imovelweb(cidade: str, uf: str, max_paginas: int = 3) -> Tuple[List[I
                 f"{slug_uf}-pagina-{pagina}.html"
             )
 
-        html, diag = _buscar_pagina(url)
+        html, diag = _buscar_pagina(url, marcador_de_conteudo="/propriedades/")
         diagnosticos.append(diag)
         if not html:
             continue

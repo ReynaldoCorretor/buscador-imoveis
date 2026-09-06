@@ -3,8 +3,8 @@ services:
     name: buscador-imoveis
     env: python
     plan: free
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "gunicorn app:app"
+    buildCommand: "pip install -r requirements.txt && playwright install --with-deps chromium"
+    startCommand: "gunicorn app:app --timeout 120 --workers 1"
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.0
