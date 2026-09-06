@@ -162,6 +162,47 @@ def _janela_ao_redor(html: str, indice_inicio: int, indice_fim: int, tamanho: in
     return html[inicio:fim]
 
 
+_PLAYWRIGHT_INSTALACAO_TENTADA = False
+
+
+def _garantir_navegador_playwright_instalado() -> str:
+    """Rede de segurança: se o Chromium do Playwright não estiver
+    instalado (o que deveria acontecer durante o build no Render, via
+    render.yaml), tenta instalar em tempo de execução, uma única vez por
+    processo. Isso cobre o caso de o "Build Command" configurado no painel
+    do Render não ter sido atualizado corretamente.
+
+    A instalação em tempo de execução só baixa o navegador em si — não
+    instala dependências de sistema via apt (isso precisaria de permissão
+    de administrador, que o processo em execução normalmente não tem).
+    Por isso, mesmo com esse reforço, pode ainda faltar alguma biblioteca
+    do sistema operacional em ambientes muito enxutos — mas vale tentar
+    antes de desistir.
+    """
+    global _PLAYWRIGHT_INSTALACAO_TENTADA
+    if _PLAYWRIGHT_INSTALACAO_TENTADA:
+        return "instalação em tempo de execução já foi tentada antes nesta sessão do servidor"
+    _PLAYWRIGHT_INSTALACAO_TENTADA = True
+
+    import subprocess
+    import sys
+
+    try:
+        logger.info("Tentando instalar o Chromium do Playwright em tempo de execução...")
+        resultado = subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            check=True,
+            timeout=180,
+            capture_output=True,
+            text=True,
+        )
+        logger.info("Instalação em tempo de execução concluída: %s", resultado.stdout[-500:])
+        return "instalação em tempo de execução concluída com sucesso"
+    except Exception as exc:
+        logger.warning("Instalação em tempo de execução falhou: %s", exc)
+        return f"instalação em tempo de execução também falhou ({exc})"
+
+
 def _buscar_pagina_playwright(url: str) -> Tuple[Optional[str], str]:
     """Busca uma página usando um navegador de verdade (headless), via
     Playwright. Isso executa o JavaScript da página como um navegador
@@ -174,6 +215,9 @@ def _buscar_pagina_playwright(url: str) -> Tuple[Optional[str], str]:
     Mais lento e pesado que um pedido HTTP comum — por isso só é usado como
     último recurso, depois que a tentativa rápida (requests/cloudscraper)
     falhou ou voltou sem conteúdo de verdade.
+
+    Se o navegador não estiver instalado, tenta se autoinstalar uma vez
+    (ver _garantir_navegador_playwright_instalado) e repete a tentativa.
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -182,43 +226,66 @@ def _buscar_pagina_playwright(url: str) -> Tuple[Optional[str], str]:
         logger.warning(msg)
         return None, msg
 
-    try:
-        with sync_playwright() as p:
-            navegador = p.chromium.launch(
-                headless=True,
-                args=["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage"],
-            )
-            try:
-                contexto = navegador.new_context(
-                    user_agent=HEADERS["User-Agent"],
-                    locale="pt-BR",
-                    viewport={"width": 1280, "height": 800},
+    def _tentar_uma_vez() -> Tuple[Optional[str], Optional[str]]:
+        """Devolve (html, None) em sucesso, ou (None, mensagem_de_erro)."""
+        try:
+            with sync_playwright() as p:
+                navegador = p.chromium.launch(
+                    headless=True,
+                    args=["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage"],
                 )
-                pagina = contexto.new_page()
+                try:
+                    contexto = navegador.new_context(
+                        user_agent=HEADERS["User-Agent"],
+                        locale="pt-BR",
+                        viewport={"width": 1280, "height": 800},
+                    )
+                    pagina = contexto.new_page()
 
-                # Bloqueia imagens/fontes/mídia para economizar memória e
-                # tempo — não precisamos do visual, só do HTML com os dados.
-                def _bloquear_recursos_pesados(rota):
-                    if rota.request.resource_type in ("image", "media", "font"):
-                        rota.abort()
-                    else:
-                        rota.continue_()
+                    def _bloquear_recursos_pesados(rota):
+                        if rota.request.resource_type in ("image", "media", "font"):
+                            rota.abort()
+                        else:
+                            rota.continue_()
 
-                pagina.route("**/*", _bloquear_recursos_pesados)
-                pagina.goto(url, wait_until="domcontentloaded", timeout=12000)
-                # Dá um tempo para conteúdo carregado via JavaScript aparecer
-                pagina.wait_for_timeout(1500)
-                html = pagina.content()
-            finally:
-                navegador.close()
+                    pagina.route("**/*", _bloquear_recursos_pesados)
+                    pagina.goto(url, wait_until="domcontentloaded", timeout=12000)
+                    pagina.wait_for_timeout(1500)
+                    html = pagina.content()
+                finally:
+                    navegador.close()
+            return html, None
+        except Exception as exc:
+            return None, str(exc)
 
+    html, erro = _tentar_uma_vez()
+
+    if html is not None:
         msg = f"{url} -> Playwright (navegador real) OK ({len(html)} caracteres)"
         logger.info(msg)
         return html, msg
-    except Exception as exc:
-        msg = f"{url} -> Playwright falhou: {exc}"
+
+    if erro and "Executable doesn't exist" in erro:
+        resultado_instalacao = _garantir_navegador_playwright_instalado()
+        if "sucesso" in resultado_instalacao:
+            html, erro2 = _tentar_uma_vez()
+            if html is not None:
+                msg = (
+                    f"{url} -> Playwright OK após autoinstalação em tempo de "
+                    f"execução ({len(html)} caracteres)"
+                )
+                logger.info(msg)
+                return html, msg
+            msg = f"{url} -> Playwright falhou mesmo após autoinstalação: {erro2}"
+            logger.warning(msg)
+            return None, msg
+        msg = f"{url} -> Playwright falhou: {erro}; {resultado_instalacao}"
         logger.warning(msg)
         return None, msg
+
+    msg = f"{url} -> Playwright falhou: {erro}"
+    logger.warning(msg)
+    return None, msg
 
 
 def _buscar_pagina(url: str, marcador_de_conteudo: Optional[str] = None) -> Tuple[Optional[str], str]:

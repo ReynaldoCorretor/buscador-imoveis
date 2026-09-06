@@ -111,7 +111,42 @@ destas situações:
   verdade — é só me enviar esse texto que ajusto o padrão de busca com
   precisão, sem mais tentativa e erro.
 
-## Status atual (foco só no Chaves na Mão + correção pendente no Render)
+## Status atual (autoinstalação do Playwright como rede de segurança)
+
+O mesmo erro (`Executable doesn't exist`) apareceu de novo mesmo depois da
+tentativa de correção no Build Command do Render. Duas frentes agora:
+
+1. **Confirmação manual no Render** (ação sua, ainda pendente):
+   Settings → Build Command → confirmar que está exatamente:
+   ```
+   pip install -r requirements.txt && playwright install --with-deps chromium
+   ```
+   e fazer o deploy escolhendo **"Clear build cache & deploy"** (não só
+   "Deploy latest commit"), para forçar reinstalação do zero. Depois,
+   acompanhe a aba "Logs" durante o build para confirmar que o texto
+   "playwright install" / "Downloading Chromium" realmente aparece rolando
+   na tela.
+
+2. **Autoinstalação em tempo de execução (rede de segurança)**: agora, se
+   o navegador não estiver instalado na hora de usar, o próprio código
+   tenta instalar sozinho (`playwright install chromium`, sem `--with-deps`
+   porque isso exigiria permissão de administrador que o processo em
+   execução não tem). Isso cobre o caso de o Build Command do Render não
+   estar sendo aplicado por algum motivo. A primeira busca depois de cada
+   reinício do servidor pode ficar bem mais lenta (baixando o navegador na
+   hora, ~150-300 MB), mas as buscas seguintes devem ser rápidas.
+
+   **Limitação importante desta rede de segurança**: ela só baixa o
+   navegador em si. Se o ambiente do Render estiver faltando bibliotecas
+   do sistema operacional que o Chromium precisa para rodar (isso normalmente
+   é resolvido pelo `--with-deps` no Build Command, que precisa de
+   permissão de administrador só disponível durante o build), a
+   autoinstalação em tempo de execução pode não ser suficiente sozinha —
+   nesse caso, o diagnóstico da próxima busca vai mostrar um erro diferente
+   (não mais "Executable doesn't exist"), o que já vai nos dizer que o
+   problema mudou de figura.
+
+## Status anterior (foco só no Chaves na Mão + correção pendente no Render)
 
 Duas mudanças importantes nesta versão:
 

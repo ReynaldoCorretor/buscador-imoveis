@@ -232,6 +232,39 @@ class TestBuscarPaginaComCamadas(unittest.TestCase):
         self.assertIsInstance(diag, str)
 
 
+class TestAutoinstalacaoPlaywright(unittest.TestCase):
+    def setUp(self):
+        # Reseta a flag de "já tentei instalar" antes de cada teste, já
+        # que ela é global (persiste entre chamadas dentro do mesmo
+        # processo, de propósito, para não tentar toda hora).
+        scrapers._PLAYWRIGHT_INSTALACAO_TENTADA = False
+
+    def tearDown(self):
+        scrapers._PLAYWRIGHT_INSTALACAO_TENTADA = False
+
+    @patch("subprocess.run")
+    def test_instalacao_bem_sucedida(self, mock_run):
+        mock_run.return_value = unittest.mock.Mock(stdout="Chromium instalado", returncode=0)
+        resultado = scrapers._garantir_navegador_playwright_instalado()
+        self.assertIn("sucesso", resultado)
+        mock_run.assert_called_once()
+
+    @patch("subprocess.run")
+    def test_instalacao_falha_nao_lanca_excecao(self, mock_run):
+        mock_run.side_effect = Exception("sem espaço em disco")
+        resultado = scrapers._garantir_navegador_playwright_instalado()
+        self.assertIn("falhou", resultado)
+        self.assertIn("sem espaço em disco", resultado)
+
+    @patch("subprocess.run")
+    def test_so_tenta_instalar_uma_vez_por_processo(self, mock_run):
+        mock_run.return_value = unittest.mock.Mock(stdout="ok", returncode=0)
+        scrapers._garantir_navegador_playwright_instalado()
+        resultado2 = scrapers._garantir_navegador_playwright_instalado()
+        mock_run.assert_called_once()  # a 2ª chamada não deve rodar de novo
+        self.assertIn("já foi tentada", resultado2)
+
+
 class TestDiagnosticarAusenciaDeLinks(unittest.TestCase):
     def test_sem_nenhuma_ocorrencia(self):
         msg = scrapers._diagnosticar_ausencia_de_links("<html>nada aqui</html>", "/imovel/")
