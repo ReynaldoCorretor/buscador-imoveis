@@ -19,7 +19,7 @@ import traceback
 
 from flask import Flask, render_template, render_template_string, request
 
-from scrapers import buscar_todos_portais
+from scrapers import buscar_todos_portais, TIPO_PARA_SLUG_CHAVESNAMAO
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -31,10 +31,11 @@ ESTADOS_BR = [
     "SP", "SE", "TO",
 ]
 
-TIPOS_IMOVEL = [
-    "Apartamento", "Casa", "Sobrado", "Casa de condomínio", "Terreno/Lote",
-    "Chácara", "Flat", "Imóvel comercial",
-]
+# A lista de tipos vem direto do mapeamento usado pelo scraper do Chaves na
+# Mão (scrapers.py) — assim o formulário sempre mostra só tipos que
+# realmente têm uma URL de busca específica naquele portal, sem duplicar a
+# lista em dois lugares.
+TIPOS_IMOVEL = list(TIPO_PARA_SLUG_CHAVESNAMAO.keys())
 
 PAGINA_ERRO = """
 <!DOCTYPE html>

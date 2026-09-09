@@ -424,7 +424,7 @@ def _aplica_filtros_basicos(
 # VivaReal — dados extraídos direto do slug da URL
 # ---------------------------------------------------------------------------
 
-def buscar_vivareal(cidade: str, uf: str, max_paginas: int = 1) -> Tuple[List[Imovel], List[str]]:
+def buscar_vivareal(cidade: str, uf: str, tipo: Optional[str] = None, max_paginas: int = 1) -> Tuple[List[Imovel], List[str]]:
     slug_cidade = _slug_cidade(cidade)
     slug_uf = uf.lower()
     imoveis: List[Imovel] = []
@@ -486,7 +486,46 @@ def buscar_vivareal(cidade: str, uf: str, max_paginas: int = 1) -> Tuple[List[Im
 # Chaves na Mão — dados também extraídos do slug da URL
 # ---------------------------------------------------------------------------
 
-def buscar_chavesnamao(cidade: str, uf: str, max_paginas: int = 1) -> Tuple[List[Imovel], List[str]]:
+# Mapeia cada opção do formulário para o trecho de URL usado pelo Chaves na
+# Mão para aquele tipo de imóvel (confirmado a partir da estrutura real do
+# site em 09/2026). Usar essa URL específica é mais preciso do que buscar
+# tudo e filtrar depois pelo título.
+TIPO_PARA_SLUG_CHAVESNAMAO = {
+    "Apartamento": "apartamentos-a-venda",
+    "Casa": "casas-a-venda",
+    "Casa de condomínio": "casas-em-condominio-a-venda",
+    "Cobertura": "coberturas-a-venda",
+    "Terreno/Lote": "terrenos-a-venda",
+    "Terreno em condomínio": "terrenos-em-condominio-a-venda",
+    "Chácara": "chacaras-a-venda",
+    "Fazenda/Sítio": "fazendas-a-venda",
+    "Flat": "flat-a-venda",
+    "Kitnet": "kitnet-a-venda",
+    "Loft": "loft-a-venda",
+    "Sala comercial": "sala-comercial-a-venda",
+    "Casa comercial": "casa-comercial-a-venda",
+    "Prédio comercial": "predio-a-venda",
+    "Galpão/Depósito": "galpao-a-venda",
+    "Ponto comercial": "ponto-comercial-a-venda",
+    "Terreno comercial": "terreno-comercial-a-venda",
+    "Garagem": "garagem-a-venda",
+}
+
+# Quando o usuário NÃO especifica um tipo ("Qualquer tipo"), em vez de
+# buscar só a página 1 de uma categoria genérica (poucos resultados),
+# combinamos a página 1 de vários tipos comuns. Isso multiplica a
+# quantidade de resultados SEM violar o robots.txt do portal — que
+# bloqueia paginação dentro de uma mesma categoria, não o acesso a
+# categorias diferentes (cada uma tem sua própria "página 1" permitida).
+TIPOS_AMPLOS_PADRAO_CHAVESNAMAO = [
+    "casas-a-venda",
+    "apartamentos-a-venda",
+    "casas-em-condominio-a-venda",
+    "terrenos-a-venda",
+]
+
+
+def buscar_chavesnamao(cidade: str, uf: str, tipo: Optional[str] = None, max_paginas: int = 1) -> Tuple[List[Imovel], List[str]]:
     slug_cidade = _slug_cidade(cidade)
     slug_uf = uf.lower()
     imoveis: List[Imovel] = []
@@ -505,60 +544,71 @@ def buscar_chavesnamao(cidade: str, uf: str, max_paginas: int = 1) -> Tuple[List
         r'\\?/imovel\\?/[a-z0-9\-]+\\?/id-\d+\\?/?', re.IGNORECASE
     )
 
-    url = f"https://www.chavesnamao.com.br/imoveis-a-venda/{slug_uf}-{slug_cidade}/"
-    html, diag = _buscar_pagina(url, marcador_de_conteudo="/imovel/")
-    if not html:
-        diagnosticos.append(diag)
-        return imoveis, diagnosticos
-
-    links_brutos = set(link_padrao.findall(html))
-    metodo = "padrão href=\"...\""
-
-    if not links_brutos:
-        achados_amplos = set(link_padrao_amplo.findall(html))
-        # findall com grupos vazios devolve strings vazias; refazemos sem
-        # grupos de captura para pegar o trecho inteiro
-        achados_amplos = set(m.group(0) for m in link_padrao_amplo.finditer(html))
-        links_brutos = {trecho.replace("\\/", "/") for trecho in achados_amplos}
-        if links_brutos:
-            metodo = "padrão amplo (formato alternativo/JSON)"
-
-    if links_brutos:
-        diag += f" — {len(links_brutos)} links encontrados ({metodo})"
+    if tipo and tipo in TIPO_PARA_SLUG_CHAVESNAMAO:
+        slugs_categoria = [TIPO_PARA_SLUG_CHAVESNAMAO[tipo]]
     else:
-        diag += " — 0 links encontrados. " + _diagnosticar_ausencia_de_links(html, "/imovel/")
-    diagnosticos.append(diag)
+        slugs_categoria = TIPOS_AMPLOS_PADRAO_CHAVESNAMAO
 
-    for link_bruto in links_brutos:
-        if link_bruto.startswith("/"):
-            link_bruto = "https://www.chavesnamao.com.br" + link_bruto
-        link = _limpar_link(link_bruto)
-        partes = link.rstrip("/").split("/")
-        slug = partes[-2] if len(partes) >= 2 and partes[-1].startswith("id-") else partes[-1]
+    links_vistos = set()
 
-        preco_match = re.search(r"RS(\d+)", link)
-        preco = float(preco_match.group(1)) if preco_match else None
+    for slug_categoria in slugs_categoria:
+        url = f"https://www.chavesnamao.com.br/{slug_categoria}/{slug_uf}-{slug_cidade}/"
+        html, diag = _buscar_pagina(url, marcador_de_conteudo="/imovel/")
 
-        area_match = re.search(r"-(\d{2,5})m2-", link)
-        area = float(area_match.group(1)) if area_match else None
+        if not html:
+            diagnosticos.append(diag)
+            continue
 
-        quartos_match = re.search(r"(\d)-quartos?-", link)
-        quartos = int(quartos_match.group(1)) if quartos_match else None
+        links_brutos = set(link_padrao.findall(html))
+        metodo = "padrão href=\"...\""
 
-        titulo = slug.replace("-", " ").title()
-        incompleto = preco is None or area is None or quartos is None
+        if not links_brutos:
+            achados_amplos = set(m.group(0) for m in link_padrao_amplo.finditer(html))
+            links_brutos = {trecho.replace("\\/", "/") for trecho in achados_amplos}
+            if links_brutos:
+                metodo = "padrão amplo (formato alternativo/JSON)"
 
-        imoveis.append(
-            Imovel(
-                portal="Chaves na Mão",
-                titulo=titulo,
-                link=link,
-                preco=preco,
-                area_m2=area,
-                quartos=quartos,
-                dados_incompletos=incompleto,
+        if links_brutos:
+            diag += f" — {len(links_brutos)} links encontrados ({metodo})"
+        else:
+            diag += " — 0 links encontrados. " + _diagnosticar_ausencia_de_links(html, "/imovel/")
+        diagnosticos.append(diag)
+
+        for link_bruto in links_brutos:
+            if link_bruto.startswith("/"):
+                link_bruto = "https://www.chavesnamao.com.br" + link_bruto
+            link = _limpar_link(link_bruto)
+
+            if link in links_vistos:
+                continue
+            links_vistos.add(link)
+
+            partes = link.rstrip("/").split("/")
+            slug = partes[-2] if len(partes) >= 2 and partes[-1].startswith("id-") else partes[-1]
+
+            preco_match = re.search(r"RS(\d+)", link)
+            preco = float(preco_match.group(1)) if preco_match else None
+
+            area_match = re.search(r"-(\d{2,5})m2-", link)
+            area = float(area_match.group(1)) if area_match else None
+
+            quartos_match = re.search(r"(\d)-quartos?-", link)
+            quartos = int(quartos_match.group(1)) if quartos_match else None
+
+            titulo = slug.replace("-", " ").title()
+            incompleto = preco is None or area is None or quartos is None
+
+            imoveis.append(
+                Imovel(
+                    portal="Chaves na Mão",
+                    titulo=titulo,
+                    link=link,
+                    preco=preco,
+                    area_m2=area,
+                    quartos=quartos,
+                    dados_incompletos=incompleto,
+                )
             )
-        )
 
     return imoveis, diagnosticos
 
@@ -567,7 +617,7 @@ def buscar_chavesnamao(cidade: str, uf: str, max_paginas: int = 1) -> Tuple[List
 # ZAP Imóveis — janela de texto ao redor do link no HTML bruto
 # ---------------------------------------------------------------------------
 
-def buscar_zap(cidade: str, uf: str, max_paginas: int = 1) -> Tuple[List[Imovel], List[str]]:
+def buscar_zap(cidade: str, uf: str, tipo: Optional[str] = None, max_paginas: int = 1) -> Tuple[List[Imovel], List[str]]:
     slug_cidade = _slug_cidade(cidade)
     slug_uf = uf.lower()
     imoveis: List[Imovel] = []
@@ -635,7 +685,7 @@ def buscar_zap(cidade: str, uf: str, max_paginas: int = 1) -> Tuple[List[Imovel]
 # Imovelweb — janela de texto ao redor do link no HTML bruto
 # ---------------------------------------------------------------------------
 
-def buscar_imovelweb(cidade: str, uf: str, max_paginas: int = 1) -> Tuple[List[Imovel], List[str]]:
+def buscar_imovelweb(cidade: str, uf: str, tipo: Optional[str] = None, max_paginas: int = 1) -> Tuple[List[Imovel], List[str]]:
     slug_cidade = _slug_cidade(cidade)
     slug_uf = uf.lower()
     imoveis: List[Imovel] = []
@@ -765,9 +815,15 @@ def buscar_todos_portais(
             continue
 
         try:
-            imoveis, diagnosticos = funcao(cidade, uf)
+            imoveis, diagnosticos = funcao(cidade, uf, tipo=tipo)
+            # Chaves na Mão já busca na URL certa do tipo pedido (ou combina
+            # vários tipos comuns quando nenhum foi especificado) — filtrar
+            # de novo pelo texto do título aqui seria redundante e poderia
+            # descartar por engano imóveis válidos com título escrito
+            # diferente do nome exato do tipo.
+            tipo_para_filtro_extra = None if nome == "Chaves na Mão" else tipo
             imoveis_filtrados = _aplica_filtros_basicos(
-                imoveis, tipo, quartos_min, banheiros_min, area_min, preco_min, preco_max
+                imoveis, tipo_para_filtro_extra, quartos_min, banheiros_min, area_min, preco_min, preco_max
             )
             resultados_por_portal[nome] = [im.to_dict() for im in imoveis_filtrados]
             diagnosticos_por_portal[nome] = diagnosticos

@@ -117,6 +117,67 @@ class TestChavesNaMao(unittest.TestCase):
         self.assertEqual(resultado[0].quartos, 2)
 
     @patch("scrapers._buscar_pagina")
+    def test_tipo_especifico_usa_url_certa(self, mock_buscar):
+        mock_buscar.return_value = (HTML_CHAVESNAMAO_SINTETICO, "OK")
+        scrapers.buscar_chavesnamao("Mogi das Cruzes", "SP", tipo="Casa")
+
+        # Só deve ter feito 1 chamada (1 tipo específico), na URL certa
+        mock_buscar.assert_called_once()
+        url_chamada = mock_buscar.call_args[0][0]
+        self.assertIn("casas-a-venda", url_chamada)
+        self.assertIn("sp-mogi-das-cruzes", url_chamada)
+
+    @patch("scrapers._buscar_pagina")
+    def test_tipo_nao_especificado_combina_categorias(self, mock_buscar):
+        mock_buscar.return_value = (HTML_CHAVESNAMAO_SINTETICO, "OK")
+        scrapers.buscar_chavesnamao("Mogi das Cruzes", "SP", tipo=None)
+
+        # Deve ter tentado todos os tipos amplos padrão, um de cada vez
+        self.assertEqual(mock_buscar.call_count, len(scrapers.TIPOS_AMPLOS_PADRAO_CHAVESNAMAO))
+        urls_chamadas = [c[0][0] for c in mock_buscar.call_args_list]
+        for slug in scrapers.TIPOS_AMPLOS_PADRAO_CHAVESNAMAO:
+            self.assertTrue(any(slug in u for u in urls_chamadas))
+
+    @patch("scrapers._buscar_pagina")
+    def test_tipo_desconhecido_cai_no_padrao_amplo(self, mock_buscar):
+        mock_buscar.return_value = (HTML_CHAVESNAMAO_SINTETICO, "OK")
+        scrapers.buscar_chavesnamao("Mogi das Cruzes", "SP", tipo="Tipo Que Não Existe")
+        self.assertEqual(mock_buscar.call_count, len(scrapers.TIPOS_AMPLOS_PADRAO_CHAVESNAMAO))
+
+    @patch("scrapers._buscar_pagina")
+    def test_combina_resultados_de_varias_categorias_sem_duplicar(self, mock_buscar):
+        # Cada categoria devolve um imóvel DIFERENTE — o total deve somar
+        # os 2, sem duplicar (o link é distinto em cada resposta simulada).
+        html_casa = (
+            '<html><a href="/imovel/casa-a-venda-2-quartos-sp-mogi-das-cruzes-'
+            'RS500000/id-1111/">Casa</a></html>'
+        )
+        html_apto = (
+            '<html><a href="/imovel/apartamento-a-venda-2-quartos-sp-mogi-das-cruzes-'
+            'RS300000/id-2222/">Apto</a></html>'
+        )
+        respostas = {
+            "casas-a-venda": (html_casa, "OK"),
+            "apartamentos-a-venda": (html_apto, "OK"),
+            "casas-em-condominio-a-venda": (None, "HTTP 403"),
+            "terrenos-a-venda": (None, "HTTP 403"),
+        }
+
+        def _fake(url, marcador_de_conteudo=None):
+            for slug, resposta in respostas.items():
+                if slug in url:
+                    return resposta
+            return (None, "não mapeado")
+
+        mock_buscar.side_effect = _fake
+
+        resultado, diagnosticos = scrapers.buscar_chavesnamao("Mogi das Cruzes", "SP", tipo=None)
+
+        self.assertEqual(len(resultado), 2)
+        precos = sorted(im.preco for im in resultado)
+        self.assertEqual(precos, [300000.0, 500000.0])
+
+    @patch("scrapers._buscar_pagina")
     def test_extrai_dados_de_link_relativo(self, mock_buscar):
         html_relativo = (
             '<html><body>'

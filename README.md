@@ -7,6 +7,38 @@ aparecem numa única página, com link direto para o anúncio original, e
 podem ser filtrados/ordenados no próprio navegador sem precisar buscar de
 novo.
 
+## Status atual (busca por tipo mais precisa + mais resultados)
+
+Duas melhorias pedidas depois que o Docker resolveu o Playwright:
+
+### 1. Tipo de imóvel mais preciso
+
+Descobrimos que o Chaves na Mão tem uma URL de busca própria para cada tipo
+(ex: `casas-a-venda/`, `apartamentos-a-venda/`, `terrenos-a-venda/`). Agora,
+quando você escolhe um tipo no formulário, a busca vai direto nessa URL
+específica — não filtra mais por palavra-chave no título depois. A lista de
+tipos no formulário também foi atualizada para bater exatamente com as
+categorias que o site realmente tem.
+
+### 2. Mais resultados, sem violar o robots.txt do portal
+
+Você perguntou se dava para consultar além da página 1. A resposta curta:
+não vamos contornar o robots.txt (ele bloqueia especificamente a
+paginação — `?pg=2` em diante — e isso foi uma decisão deliberada de
+respeitar o que o site pede, diferente dos bloqueios técnicos que já
+contornamos).
+
+Em vez disso, quando você deixa "Qualquer tipo" selecionado, a busca agora
+**combina a página 1 de várias categorias diferentes** (casas, apartamentos,
+casas em condomínio, terrenos) numa busca só. Cada uma ainda é só a
+página 1 da própria categoria — o portal permite isso normalmente, é
+equivalente a uma pessoa navegando por 4 categorias diferentes — mas o
+resultado final tem bem mais imóveis do que buscar só a categoria
+genérica.
+
+Se você escolher um tipo específico (ex: só "Casa"), a busca volta a
+consultar só aquela categoria, com o mesmo limite de 1 página.
+
 ## Status atual (migração para Docker — necessário para o Playwright funcionar)
 
 O modo de hospedagem usado até agora (Render "Web Service" comum) **não
