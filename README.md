@@ -7,7 +7,58 @@ aparecem numa única página, com link direto para o anúncio original, e
 podem ser filtrados/ordenados no próprio navegador sem precisar buscar de
 novo.
 
-## Como publicar (passo a passo, sem precisar saber programar)
+## Status atual (migração para Docker — necessário para o Playwright funcionar)
+
+O modo de hospedagem usado até agora (Render "Web Service" comum) **não
+permite instalar as dependências de sistema do Chromium** — o build falhava
+com `su: Authentication failure` porque esse modo não libera permissão de
+administrador. Por isso o projeto migrou para **deploy via Docker**, usando
+a imagem oficial `mcr.microsoft.com/playwright/python`, que já vem com o
+Chromium e tudo que ele precisa pré-instalado — a instalação acontece na
+hora de montar a imagem, com permissão total, sem depender de nada do
+Render.
+
+### ⚠️ Isto é um novo serviço no Render, não uma atualização do antigo
+
+Serviços do tipo "Web Service" (Python nativo) **não podem ser convertidos**
+para Docker depois de criados — é preciso criar um **serviço novo do zero**
+escolhendo o ambiente Docker. Siga o passo a passo abaixo, que substitui a
+seção "Como publicar" mais adiante neste README (que ainda descreve o modo
+antigo, sem Docker).
+
+### Como publicar a versão Docker
+
+1. Suba estes arquivos para o mesmo repositório do GitHub de sempre
+   (incluindo os novos `Dockerfile` e `.dockerignore`, e o `render.yaml`
+   atualizado).
+2. No painel do Render, clique em **New +** → **Web Service**.
+3. Selecione o mesmo repositório `buscador-imoveis`.
+4. O Render deve detectar o `Dockerfile` na raiz do projeto automaticamente
+   e mudar o campo "Environment" para **Docker** sozinho. Se isso não
+   acontecer automaticamente, procure a opção de trocar o ambiente
+   manualmente para Docker antes de continuar.
+5. Escolha o plano **Free**.
+6. Clique em **Create Web Service**.
+7. O build vai demorar bem mais que antes (a imagem do Playwright é
+   grande, pode passar de 10 minutos na primeira vez) — isso é esperado.
+8. Quando terminar, você vai ter uma nova URL (provavelmente parecida, mas
+   não necessariamente igual à antiga, tipo
+   `https://buscador-imoveis-xxxx.onrender.com`).
+
+### O que fazer com o serviço antigo
+
+Depois de confirmar que o novo serviço (Docker) está funcionando, você pode
+ir nas configurações do serviço antigo (o que dava erro) e **excluí-lo** ou
+apenas deixá-lo parado — ele não vai mais ser usado. Recomendo só apagar
+depois de confirmar que o novo está funcionando de verdade, para não ficar
+sem nenhuma versão no ar enquanto testa.
+
+## Como publicar (passo a passo antigo, sem Docker — não use mais)
+
+⚠️ Esta seção descreve o processo do modo "Web Service" comum, que **não
+consegue rodar o Playwright** (erro de permissão visto acima). Ficou aqui só
+de referência histórica — siga a seção "Como publicar a versão Docker"
+acima em vez desta.
 
 ### 1. Criar uma conta no Render.com
 1. Acesse [render.com](https://render.com) e clique em **Get Started**.
@@ -48,14 +99,16 @@ na primeira visita do dia. Isso é normal e não indica problema.
 ```
 buscador-imoveis/
 ├── app.py                    # aplicação Flask (rotas / e /buscar)
-├── scrapers.py                # busca e extração de dados dos 4 portais
+├── scrapers.py                # busca e extração de dados (Chaves na Mão ativo; outros 3 pausados)
 ├── test_scrapers.py           # testes automatizados (HTML sintético)
 ├── templates/
 │   ├── index.html              # formulário de busca
 │   └── resultados.html         # lista de resultados + filtros em JS
 ├── requirements.txt
-├── Procfile
-└── render.yaml
+├── Dockerfile                  # imagem com Playwright/Chromium pré-instalado
+├── .dockerignore
+├── Procfile                    # não usado no deploy via Docker (mantido por referência)
+└── render.yaml                 # configurado para deploy via Docker
 ```
 
 ## Como funciona a busca
