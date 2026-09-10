@@ -121,28 +121,73 @@ class TestChavesNaMao(unittest.TestCase):
         mock_buscar.return_value = (HTML_CHAVESNAMAO_SINTETICO, "OK")
         scrapers.buscar_chavesnamao("Mogi das Cruzes", "SP", tipo="Casa")
 
-        # Só deve ter feito 1 chamada (1 tipo específico), na URL certa
-        mock_buscar.assert_called_once()
-        url_chamada = mock_buscar.call_args[0][0]
-        self.assertIn("casas-a-venda", url_chamada)
-        self.assertIn("sp-mogi-das-cruzes", url_chamada)
+        # A 1ª chamada é a página 1 (sem ?pg=). Como o mock sempre devolve
+        # o MESMO link, a página 2 não traz nada novo e a busca para aí
+        # (parada antecipada) — por isso 2 chamadas, não 5.
+        self.assertEqual(mock_buscar.call_count, 2)
+        primeira_url = mock_buscar.call_args_list[0][0][0]
+        segunda_url = mock_buscar.call_args_list[1][0][0]
+        self.assertIn("casas-a-venda", primeira_url)
+        self.assertIn("sp-mogi-das-cruzes", primeira_url)
+        self.assertNotIn("?pg=", primeira_url)
+        self.assertIn("?pg=2", segunda_url)
 
     @patch("scrapers._buscar_pagina")
     def test_tipo_nao_especificado_combina_categorias(self, mock_buscar):
         mock_buscar.return_value = (HTML_CHAVESNAMAO_SINTETICO, "OK")
         scrapers.buscar_chavesnamao("Mogi das Cruzes", "SP", tipo=None)
 
-        # Deve ter tentado todos os tipos amplos padrão, um de cada vez
-        self.assertEqual(mock_buscar.call_count, len(scrapers.TIPOS_AMPLOS_PADRAO_CHAVESNAMAO))
+        # Todas as categorias foram tentadas ao menos uma vez
         urls_chamadas = [c[0][0] for c in mock_buscar.call_args_list]
         for slug in scrapers.TIPOS_AMPLOS_PADRAO_CHAVESNAMAO:
             self.assertTrue(any(slug in u for u in urls_chamadas))
+        # A 1ª categoria tenta página 1 e 2 (2 chamadas); como o mock
+        # sempre devolve o mesmo link, as demais categorias já começam
+        # "sem novidade" e param na própria página 1 (1 chamada cada) —
+        # total: 2 + 1 + 1 + 1 = 5
+        self.assertEqual(mock_buscar.call_count, 5)
 
     @patch("scrapers._buscar_pagina")
     def test_tipo_desconhecido_cai_no_padrao_amplo(self, mock_buscar):
         mock_buscar.return_value = (HTML_CHAVESNAMAO_SINTETICO, "OK")
         scrapers.buscar_chavesnamao("Mogi das Cruzes", "SP", tipo="Tipo Que Não Existe")
-        self.assertEqual(mock_buscar.call_count, len(scrapers.TIPOS_AMPLOS_PADRAO_CHAVESNAMAO))
+        self.assertEqual(mock_buscar.call_count, 5)  # mesmo padrão do teste acima
+
+    @patch("scrapers._buscar_pagina")
+    def test_pagina_maxima_respeitada_e_nao_ultrapassa_5(self, mock_buscar):
+        # HTML sempre com um link NOVO (id diferente a cada chamada) para
+        # forçar a busca a continuar paginando até o limite.
+        contador = {"n": 0}
+
+        def _fake(url, marcador_de_conteudo=None):
+            contador["n"] += 1
+            html = (
+                f'<html><a href="/imovel/casa-a-venda-2-quartos-sp-mogi-das-cruzes-'
+                f'RS{500000 + contador["n"]}/id-{9000 + contador["n"]}/">Casa</a></html>'
+            )
+            return html, "OK"
+
+        mock_buscar.side_effect = _fake
+
+        scrapers.buscar_chavesnamao("Mogi das Cruzes", "SP", tipo="Casa")
+
+        # Mesmo com resultados sempre "novos", nunca deve passar de 5
+        # páginas (limite do robots.txt: só ?pg=2 até ?pg=5 são permitidos)
+        self.assertEqual(mock_buscar.call_count, scrapers.PAGINA_MAXIMA_PERMITIDA_CHAVESNAMAO)
+        urls_chamadas = [c[0][0] for c in mock_buscar.call_args_list]
+        self.assertNotIn("?pg=6", " ".join(urls_chamadas))
+
+    @patch("scrapers._buscar_pagina")
+    def test_max_paginas_customizado_e_respeitado(self, mock_buscar):
+        mock_buscar.return_value = (
+            '<html><a href="/imovel/casa-a-venda-2-quartos-sp-mogi-das-cruzes-'
+            'RS500000/id-1/">Casa</a></html>',
+            "OK",
+        )
+        # Pedindo explicitamente só 1 página, mesmo tendo tipo específico
+        # (que por padrão iria até 5)
+        scrapers.buscar_chavesnamao("Mogi das Cruzes", "SP", tipo="Casa", max_paginas=1)
+        self.assertEqual(mock_buscar.call_count, 1)
 
     @patch("scrapers._buscar_pagina")
     def test_combina_resultados_de_varias_categorias_sem_duplicar(self, mock_buscar):

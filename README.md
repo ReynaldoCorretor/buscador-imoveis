@@ -7,7 +7,46 @@ aparecem numa única página, com link direto para o anúncio original, e
 podem ser filtrados/ordenados no próprio navegador sem precisar buscar de
 novo.
 
-## Status atual (busca por tipo mais precisa + mais resultados)
+## Status atual (robots.txt permite mais páginas — correção importante!)
+
+O Reynaldo pediu para conferir de verdade o `robots.txt` do Chaves na Mão
+(em vez de confiar numa suposição de sessões anteriores) e o conteúdo real
+mostrou o **oposto** do que estava documentado:
+
+```
+Allow: /*?pg=2$
+Allow: /*?pg=3$
+Allow: /*?pg=4$
+Allow: /*?pg=5$
+Disallow: /*?*
+```
+
+O site **permite explicitamente** as páginas 2 a 5 (via `?pg=N`) — só
+bloqueia parâmetros de URL fora dessa lista. A suposição anterior de "só
+página 1" estava errada ou desatualizada.
+
+Bônus: o `robots.txt` também tem uma seção `Content-Signal` dizendo
+`search=yes` (permite construir índice de busca com links/resumos) e
+`ai-train=no` (não permite usar o conteúdo para treinar modelos de IA).
+Este projeto se encaixa exatamente no uso permitido — mostra links e dados
+resumidos, sem copiar conteúdo completo nem treinar nada.
+
+### O que mudou no código
+
+- Busca até 5 páginas por categoria quando um tipo específico é escolhido
+  (usa o limite máximo permitido).
+- Quando nenhum tipo é especificado (busca combinando várias categorias),
+  busca até 2 páginas de cada uma por padrão — para não estourar o tempo
+  de resposta do Render buscando 5 páginas × 4 categorias ao mesmo tempo.
+- Para de paginar automaticamente uma categoria assim que uma página não
+  traz nenhum imóvel novo (evita gastar tempo à toa se os resultados
+  acabaram antes da página 5, ou se algo bloqueou no meio do caminho).
+- Nunca ultrapassa a página 5, mesmo se pedido — esse é o limite que o
+  próprio site autoriza.
+
+
+
+## Status atual (tipo mais preciso na busca)
 
 Duas melhorias pedidas depois que o Docker resolveu o Playwright:
 
@@ -20,24 +59,14 @@ específica — não filtra mais por palavra-chave no título depois. A lista de
 tipos no formulário também foi atualizada para bater exatamente com as
 categorias que o site realmente tem.
 
-### 2. Mais resultados, sem violar o robots.txt do portal
+### 2. Mais resultados (ver seção acima sobre paginação)
 
-Você perguntou se dava para consultar além da página 1. A resposta curta:
-não vamos contornar o robots.txt (ele bloqueia especificamente a
-paginação — `?pg=2` em diante — e isso foi uma decisão deliberada de
-respeitar o que o site pede, diferente dos bloqueios técnicos que já
-contornamos).
-
-Em vez disso, quando você deixa "Qualquer tipo" selecionado, a busca agora
-**combina a página 1 de várias categorias diferentes** (casas, apartamentos,
-casas em condomínio, terrenos) numa busca só. Cada uma ainda é só a
-página 1 da própria categoria — o portal permite isso normalmente, é
-equivalente a uma pessoa navegando por 4 categorias diferentes — mas o
-resultado final tem bem mais imóveis do que buscar só a categoria
-genérica.
-
-Se você escolher um tipo específico (ex: só "Casa"), a busca volta a
-consultar só aquela categoria, com o mesmo limite de 1 página.
+⚠️ Esta seção ficou desatualizada logo depois de escrita — na época,
+acreditávamos (com base em documentação de sessões anteriores) que o
+robots.txt bloqueava páginas além da 1ª. Confirmando o arquivo de verdade,
+descobrimos o oposto: ele permite explicitamente até a página 5. Ver a
+seção "robots.txt permite mais páginas" no topo deste README para o que
+realmente foi implementado.
 
 ## Status atual (migração para Docker — necessário para o Playwright funcionar)
 

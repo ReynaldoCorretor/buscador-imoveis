@@ -525,90 +525,133 @@ TIPOS_AMPLOS_PADRAO_CHAVESNAMAO = [
 ]
 
 
-def buscar_chavesnamao(cidade: str, uf: str, tipo: Optional[str] = None, max_paginas: int = 1) -> Tuple[List[Imovel], List[str]]:
+# O robots.txt do Chaves na Mão permite explicitamente as páginas 2 a 5
+# via parâmetro ?pg= (confirmado em 09/2026 — ver comentário na função
+# buscar_chavesnamao). Esse é o limite máximo que respeitamos.
+PAGINA_MAXIMA_PERMITIDA_CHAVESNAMAO = 5
+
+
+def buscar_chavesnamao(
+    cidade: str,
+    uf: str,
+    tipo: Optional[str] = None,
+    max_paginas: Optional[int] = None,
+) -> Tuple[List[Imovel], List[str]]:
+    """
+    Busca imóveis no Chaves na Mão.
+
+    Paginação: o robots.txt do site tem estas regras:
+        Allow: /*?pg=2$
+        Allow: /*?pg=3$
+        Allow: /*?pg=4$
+        Allow: /*?pg=5$
+        Disallow: /*?*
+    Ou seja, ele permite EXPLICITAMENTE as páginas 2 a 5 (via ?pg=N) e só
+    bloqueia parâmetros de URL fora dessa lista. Por isso paginamos até a
+    página 5 — nunca além disso, já que páginas 6+ cairiam no Disallow
+    genérico.
+
+    max_paginas controla quantas páginas por categoria são buscadas (1 a
+    5). Se não for informado: usa 5 quando um tipo específico foi pedido
+    (1 categoria só, então cabe no tempo disponível), ou 2 quando nenhum
+    tipo foi especificado (várias categorias combinadas — ver
+    TIPOS_AMPLOS_PADRAO_CHAVESNAMAO — para não estourar o tempo de resposta
+    do Render buscando 5 páginas de 4 categorias ao mesmo tempo).
+    """
     slug_cidade = _slug_cidade(cidade)
     slug_uf = uf.lower()
     imoveis: List[Imovel] = []
     diagnosticos: List[str] = []
 
-    # Tentativa 1: link clássico dentro de href="..." (aspas duplas),
-    # absoluto ou relativo.
     link_padrao = re.compile(
         r'href="((?:https://www\.chavesnamao\.com\.br)?/imovel/[^"]+)"'
     )
-    # Tentativa 2 (mais ampla): reconhece o formato do link em qualquer
-    # lugar do HTML — inclusive dentro de dados JSON embutidos na página
-    # (comum em sites feitos com Next.js/React), onde as barras podem vir
-    # "escapadas" (\/) e as aspas podem ser simples.
     link_padrao_amplo = re.compile(
         r'\\?/imovel\\?/[a-z0-9\-]+\\?/id-\d+\\?/?', re.IGNORECASE
     )
 
     if tipo and tipo in TIPO_PARA_SLUG_CHAVESNAMAO:
         slugs_categoria = [TIPO_PARA_SLUG_CHAVESNAMAO[tipo]]
+        paginas_por_categoria = max_paginas or PAGINA_MAXIMA_PERMITIDA_CHAVESNAMAO
     else:
         slugs_categoria = TIPOS_AMPLOS_PADRAO_CHAVESNAMAO
+        paginas_por_categoria = max_paginas or 2
+
+    paginas_por_categoria = max(1, min(paginas_por_categoria, PAGINA_MAXIMA_PERMITIDA_CHAVESNAMAO))
 
     links_vistos = set()
 
     for slug_categoria in slugs_categoria:
-        url = f"https://www.chavesnamao.com.br/{slug_categoria}/{slug_uf}-{slug_cidade}/"
-        html, diag = _buscar_pagina(url, marcador_de_conteudo="/imovel/")
+        url_base = f"https://www.chavesnamao.com.br/{slug_categoria}/{slug_uf}-{slug_cidade}/"
 
-        if not html:
-            diagnosticos.append(diag)
-            continue
+        for pagina in range(1, paginas_por_categoria + 1):
+            url = url_base if pagina == 1 else f"{url_base}?pg={pagina}"
+            html, diag = _buscar_pagina(url, marcador_de_conteudo="/imovel/")
 
-        links_brutos = set(link_padrao.findall(html))
-        metodo = "padrão href=\"...\""
+            if not html:
+                diagnosticos.append(diag)
+                break  # não adianta tentar a próxima página desta categoria
 
-        if not links_brutos:
-            achados_amplos = set(m.group(0) for m in link_padrao_amplo.finditer(html))
-            links_brutos = {trecho.replace("\\/", "/") for trecho in achados_amplos}
-            if links_brutos:
-                metodo = "padrão amplo (formato alternativo/JSON)"
+            links_brutos = set(link_padrao.findall(html))
+            metodo = "padrão href=\"...\""
 
-        if links_brutos:
-            diag += f" — {len(links_brutos)} links encontrados ({metodo})"
-        else:
-            diag += " — 0 links encontrados. " + _diagnosticar_ausencia_de_links(html, "/imovel/")
-        diagnosticos.append(diag)
+            if not links_brutos:
+                achados_amplos = set(m.group(0) for m in link_padrao_amplo.finditer(html))
+                links_brutos = {trecho.replace("\\/", "/") for trecho in achados_amplos}
+                if links_brutos:
+                    metodo = "padrão amplo (formato alternativo/JSON)"
 
-        for link_bruto in links_brutos:
-            if link_bruto.startswith("/"):
-                link_bruto = "https://www.chavesnamao.com.br" + link_bruto
-            link = _limpar_link(link_bruto)
+            links_novos_nesta_pagina = 0
 
-            if link in links_vistos:
-                continue
-            links_vistos.add(link)
+            for link_bruto in links_brutos:
+                if link_bruto.startswith("/"):
+                    link_bruto = "https://www.chavesnamao.com.br" + link_bruto
+                link = _limpar_link(link_bruto)
 
-            partes = link.rstrip("/").split("/")
-            slug = partes[-2] if len(partes) >= 2 and partes[-1].startswith("id-") else partes[-1]
+                if link in links_vistos:
+                    continue
+                links_vistos.add(link)
+                links_novos_nesta_pagina += 1
 
-            preco_match = re.search(r"RS(\d+)", link)
-            preco = float(preco_match.group(1)) if preco_match else None
+                partes = link.rstrip("/").split("/")
+                slug = partes[-2] if len(partes) >= 2 and partes[-1].startswith("id-") else partes[-1]
 
-            area_match = re.search(r"-(\d{2,5})m2-", link)
-            area = float(area_match.group(1)) if area_match else None
+                preco_match = re.search(r"RS(\d+)", link)
+                preco = float(preco_match.group(1)) if preco_match else None
 
-            quartos_match = re.search(r"(\d)-quartos?-", link)
-            quartos = int(quartos_match.group(1)) if quartos_match else None
+                area_match = re.search(r"-(\d{2,5})m2-", link)
+                area = float(area_match.group(1)) if area_match else None
 
-            titulo = slug.replace("-", " ").title()
-            incompleto = preco is None or area is None or quartos is None
+                quartos_match = re.search(r"(\d)-quartos?-", link)
+                quartos = int(quartos_match.group(1)) if quartos_match else None
 
-            imoveis.append(
-                Imovel(
-                    portal="Chaves na Mão",
-                    titulo=titulo,
-                    link=link,
-                    preco=preco,
-                    area_m2=area,
-                    quartos=quartos,
-                    dados_incompletos=incompleto,
+                titulo = slug.replace("-", " ").title()
+                incompleto = preco is None or area is None or quartos is None
+
+                imoveis.append(
+                    Imovel(
+                        portal="Chaves na Mão",
+                        titulo=titulo,
+                        link=link,
+                        preco=preco,
+                        area_m2=area,
+                        quartos=quartos,
+                        dados_incompletos=incompleto,
+                    )
                 )
-            )
+
+            if links_brutos:
+                diag += f" — {len(links_brutos)} links encontrados ({metodo}), {links_novos_nesta_pagina} novos"
+            else:
+                diag += " — 0 links encontrados. " + _diagnosticar_ausencia_de_links(html, "/imovel/")
+            diagnosticos.append(diag)
+
+            # Parada antecipada: se esta página não trouxe nenhum link
+            # novo, provavelmente chegamos ao fim dos resultados dessa
+            # categoria (ou fomos bloqueados) — não faz sentido continuar
+            # gastando tempo com as próximas páginas dela.
+            if links_novos_nesta_pagina == 0:
+                break
 
     return imoveis, diagnosticos
 
