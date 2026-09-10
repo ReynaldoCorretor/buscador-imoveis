@@ -7,6 +7,31 @@ aparecem numa única página, com link direto para o anúncio original, e
 podem ser filtrados/ordenados no próprio navegador sem precisar buscar de
 novo.
 
+## Status atual (correção de erro 502 — navegador reaproveitado)
+
+Depois de habilitar a busca em várias páginas, a busca começou a dar erro
+**502** no Render (a plataforma derruba a conexão quando o processo demora
+demais ou trava). Causa provável: cada página que precisava do Playwright
+estava abrindo e fechando um navegador Chromium **inteiro do zero** — com
+até 5 páginas por categoria, isso multiplicava um custo que já é pesado
+sozinho.
+
+### O que mudou
+
+1. **Navegador reaproveitado**: agora o Chromium é aberto **uma única vez**
+   por processo do servidor e reaproveitado em todas as páginas seguintes
+   (só abre uma aba nova por página, não um navegador novo). Isso reduz
+   bastante o tempo e a memória usados quando várias páginas precisam do
+   Playwright na mesma busca.
+2. **Padrões de página mais conservadores**: tipo específico agora busca
+   até 3 páginas por padrão (era 5); busca combinando várias categorias
+   agora busca 1 página por categoria por padrão (era 2). Ainda dá para
+   pedir mais explicitamente via parâmetro, mas o padrão ficou mais seguro.
+3. **Orçamento de tempo de segurança**: a busca no Chaves na Mão agora para
+   de buscar páginas novas automaticamente se passar de 70 segundos no
+   total — o que já foi encontrado até ali é aproveitado normalmente, só
+   não continua arriscando estourar o limite do Render.
+
 ## Status atual (robots.txt permite mais páginas — correção importante!)
 
 O Reynaldo pediu para conferir de verdade o `robots.txt` do Chaves na Mão

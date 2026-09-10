@@ -141,22 +141,23 @@ class TestChavesNaMao(unittest.TestCase):
         urls_chamadas = [c[0][0] for c in mock_buscar.call_args_list]
         for slug in scrapers.TIPOS_AMPLOS_PADRAO_CHAVESNAMAO:
             self.assertTrue(any(slug in u for u in urls_chamadas))
-        # A 1ª categoria tenta página 1 e 2 (2 chamadas); como o mock
-        # sempre devolve o mesmo link, as demais categorias já começam
-        # "sem novidade" e param na própria página 1 (1 chamada cada) —
-        # total: 2 + 1 + 1 + 1 = 5
-        self.assertEqual(mock_buscar.call_count, 5)
+        # Padrão atual: 1 página por categoria quando nenhum tipo é
+        # especificado (reduzido de 2 para 1 por segurança de tempo) — 4
+        # categorias × 1 página = 4 chamadas.
+        self.assertEqual(mock_buscar.call_count, 4)
 
     @patch("scrapers._buscar_pagina")
     def test_tipo_desconhecido_cai_no_padrao_amplo(self, mock_buscar):
         mock_buscar.return_value = (HTML_CHAVESNAMAO_SINTETICO, "OK")
         scrapers.buscar_chavesnamao("Mogi das Cruzes", "SP", tipo="Tipo Que Não Existe")
-        self.assertEqual(mock_buscar.call_count, 5)  # mesmo padrão do teste acima
+        self.assertEqual(mock_buscar.call_count, 4)  # mesmo padrão do teste acima
 
     @patch("scrapers._buscar_pagina")
     def test_pagina_maxima_respeitada_e_nao_ultrapassa_5(self, mock_buscar):
         # HTML sempre com um link NOVO (id diferente a cada chamada) para
-        # forçar a busca a continuar paginando até o limite.
+        # forçar a busca a continuar paginando até o limite. Pede
+        # explicitamente mais páginas do que o permitido (10), para
+        # confirmar que o teto de 5 é respeitado mesmo assim.
         contador = {"n": 0}
 
         def _fake(url, marcador_de_conteudo=None):
@@ -169,10 +170,10 @@ class TestChavesNaMao(unittest.TestCase):
 
         mock_buscar.side_effect = _fake
 
-        scrapers.buscar_chavesnamao("Mogi das Cruzes", "SP", tipo="Casa")
+        scrapers.buscar_chavesnamao("Mogi das Cruzes", "SP", tipo="Casa", max_paginas=10)
 
-        # Mesmo com resultados sempre "novos", nunca deve passar de 5
-        # páginas (limite do robots.txt: só ?pg=2 até ?pg=5 são permitidos)
+        # Mesmo pedindo 10 páginas, nunca deve passar de 5 (limite do
+        # robots.txt: só ?pg=2 até ?pg=5 são permitidos)
         self.assertEqual(mock_buscar.call_count, scrapers.PAGINA_MAXIMA_PERMITIDA_CHAVESNAMAO)
         urls_chamadas = [c[0][0] for c in mock_buscar.call_args_list]
         self.assertNotIn("?pg=6", " ".join(urls_chamadas))
@@ -336,6 +337,85 @@ class TestBuscarPaginaComCamadas(unittest.TestCase):
         # Neste ambiente de teste o pacote pode ou não estar instalado —
         # o importante é que a função NUNCA lance uma exceção não tratada.
         self.assertIsInstance(diag, str)
+
+
+class TestOrcamentoDeTempo(unittest.TestCase):
+    @patch("scrapers._buscar_pagina")
+    def test_para_de_paginar_apos_estourar_orcamento_de_tempo(self, mock_buscar):
+        # Simula cada chamada demorando "tempo real" o suficiente para
+        # estourar o orçamento logo na 2ª chamada, usando time.sleep curto
+        # + um orçamento reduzido via monkeypatch para o teste ser rápido.
+        import scrapers as scrapers_mod
+
+        chamadas = {"n": 0}
+
+        def _fake(url, marcador_de_conteudo=None):
+            chamadas["n"] += 1
+            html = (
+                f'<html><a href="/imovel/casa-a-venda-2-quartos-sp-mogi-das-cruzes-'
+                f'RS{500000 + chamadas["n"]}/id-{9000 + chamadas["n"]}/">Casa</a></html>'
+            )
+            return html, "OK"
+
+        mock_buscar.side_effect = _fake
+
+        # Reduz drasticamente o "relógio" percebido pela função: a 1ª
+        # chamada de time.time() é o início, a 2ª já estoura o orçamento.
+        tempos = iter([1000.0, 1000.0, 1000.0 + 999])
+        with patch("scrapers.time.time", side_effect=lambda: next(tempos, 1000.0 + 999)):
+            resultado, diagnosticos = scrapers_mod.buscar_chavesnamao(
+                "Mogi das Cruzes", "SP", tipo="Casa", max_paginas=5
+            )
+
+        # Deve ter parado bem antes das 5 páginas por causa do orçamento
+        self.assertLess(mock_buscar.call_count, 5)
+        self.assertTrue(any("limite de tempo" in d for d in diagnosticos))
+
+
+class TestNavegadorPlaywrightCompartilhado(unittest.TestCase):
+    def setUp(self):
+        scrapers._PLAYWRIGHT_GLOBAL = None
+        scrapers._NAVEGADOR_GLOBAL = None
+
+    def tearDown(self):
+        scrapers._PLAYWRIGHT_GLOBAL = None
+        scrapers._NAVEGADOR_GLOBAL = None
+
+    def test_reaproveita_navegador_entre_chamadas(self):
+        navegador_fake = unittest.mock.Mock()
+        navegador_fake.is_connected.return_value = True
+
+        playwright_fake = unittest.mock.Mock()
+        playwright_fake.chromium.launch.return_value = navegador_fake
+
+        with patch("playwright.sync_api.sync_playwright") as mock_sp:
+            mock_sp.return_value.start.return_value = playwright_fake
+
+            nav1 = scrapers._obter_navegador_playwright_compartilhado()
+            nav2 = scrapers._obter_navegador_playwright_compartilhado()
+
+        # A 2ª chamada deve devolver o MESMO navegador, sem abrir outro
+        self.assertIs(nav1, nav2)
+        playwright_fake.chromium.launch.assert_called_once()
+
+    def test_abre_novo_navegador_se_o_antigo_caiu(self):
+        navegador_morto = unittest.mock.Mock()
+        navegador_morto.is_connected.side_effect = Exception("conexão perdida")
+
+        navegador_novo = unittest.mock.Mock()
+        navegador_novo.is_connected.return_value = True
+
+        playwright_fake = unittest.mock.Mock()
+        playwright_fake.chromium.launch.side_effect = [navegador_morto, navegador_novo]
+
+        with patch("playwright.sync_api.sync_playwright") as mock_sp:
+            mock_sp.return_value.start.return_value = playwright_fake
+
+            nav1 = scrapers._obter_navegador_playwright_compartilhado()
+            nav2 = scrapers._obter_navegador_playwright_compartilhado()
+
+        self.assertIsNot(nav1, nav2)
+        self.assertEqual(playwright_fake.chromium.launch.call_count, 2)
 
 
 class TestAutoinstalacaoPlaywright(unittest.TestCase):

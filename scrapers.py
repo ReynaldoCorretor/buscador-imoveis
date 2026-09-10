@@ -34,6 +34,7 @@ HTML), e imóveis com dado faltante não são descartados — só marcados como
 
 import re
 import logging
+import time
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 from urllib.parse import urlsplit, urlunsplit
@@ -164,6 +165,126 @@ def _janela_ao_redor(html: str, indice_inicio: int, indice_fim: int, tamanho: in
 
 _PLAYWRIGHT_INSTALACAO_TENTADA = False
 
+# Navegador Playwright compartilhado — aberto UMA vez por processo do
+# servidor e reaproveitado em todas as buscas seguintes (em vez de abrir e
+# fechar um Chromium inteiro a cada página). Abrir o navegador é a parte
+# mais lenta e mais pesada em memória; reaproveitar evita multiplicar esse
+# custo quando várias páginas/categorias precisam do Playwright na mesma
+# busca (foi essa multiplicação que causou um erro 502 no Render quando a
+# busca por 5 páginas de uma categoria foi ativada).
+_PLAYWRIGHT_GLOBAL = None
+_NAVEGADOR_GLOBAL = None
+
+
+def _obter_navegador_playwright_compartilhado():
+    """Devolve um navegador Chromium já aberto, criando-o na primeira vez
+    e reaproveitando nas chamadas seguintes. Se o navegador guardado tiver
+    caído por algum motivo, abre um novo."""
+    global _PLAYWRIGHT_GLOBAL, _NAVEGADOR_GLOBAL
+    from playwright.sync_api import sync_playwright
+
+    if _NAVEGADOR_GLOBAL is not None:
+        try:
+            if _NAVEGADOR_GLOBAL.is_connected():
+                return _NAVEGADOR_GLOBAL
+        except Exception:
+            pass  # navegador antigo morreu; vamos abrir um novo abaixo
+
+    if _PLAYWRIGHT_GLOBAL is None:
+        _PLAYWRIGHT_GLOBAL = sync_playwright().start()
+
+    _NAVEGADOR_GLOBAL = _PLAYWRIGHT_GLOBAL.chromium.launch(
+        headless=True,
+        args=["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage"],
+    )
+    return _NAVEGADOR_GLOBAL
+
+
+def _buscar_pagina_playwright(url: str) -> Tuple[Optional[str], str]:
+    """Busca uma página usando um navegador de verdade (headless), via
+    Playwright. Isso executa o JavaScript da página como um navegador
+    normal faria — necessário para portais que só entregam o conteúdo real
+    depois de carregar dados via JavaScript, ou que servem uma página
+    "vazia" de propósito para pedidos que reconhecem como automatizados
+    (requests/cloudscraper não executam JavaScript, então não conseguem
+    superar essa barreira).
+
+    Mais lento e pesado que um pedido HTTP comum — por isso só é usado como
+    último recurso, depois que a tentativa rápida (requests/cloudscraper)
+    falhou ou voltou sem conteúdo de verdade.
+
+    Reaproveita um navegador já aberto (ver
+    _obter_navegador_playwright_compartilhado) — só cria uma ABA nova por
+    página, não um navegador inteiro novo. Isso é bem mais rápido e leve
+    quando várias páginas precisam do Playwright na mesma busca.
+
+    Se o navegador não estiver instalado, tenta se autoinstalar uma vez
+    (ver _garantir_navegador_playwright_instalado) e repete a tentativa.
+    """
+    try:
+        from playwright.sync_api import sync_playwright  # noqa: F401 (só para checar import)
+    except ImportError as exc:
+        msg = f"{url} -> Playwright não está instalado neste ambiente ({exc})"
+        logger.warning(msg)
+        return None, msg
+
+    def _tentar_uma_vez() -> Tuple[Optional[str], Optional[str]]:
+        """Devolve (html, None) em sucesso, ou (None, mensagem_de_erro)."""
+        try:
+            navegador = _obter_navegador_playwright_compartilhado()
+            contexto = navegador.new_context(
+                user_agent=HEADERS["User-Agent"],
+                locale="pt-BR",
+                viewport={"width": 1280, "height": 800},
+            )
+            try:
+                pagina = contexto.new_page()
+
+                def _bloquear_recursos_pesados(rota):
+                    if rota.request.resource_type in ("image", "media", "font"):
+                        rota.abort()
+                    else:
+                        rota.continue_()
+
+                pagina.route("**/*", _bloquear_recursos_pesados)
+                pagina.goto(url, wait_until="domcontentloaded", timeout=12000)
+                pagina.wait_for_timeout(1500)
+                html = pagina.content()
+            finally:
+                contexto.close()  # fecha só a aba/contexto, não o navegador inteiro
+            return html, None
+        except Exception as exc:
+            return None, str(exc)
+
+    html, erro = _tentar_uma_vez()
+
+    if html is not None:
+        msg = f"{url} -> Playwright (navegador real) OK ({len(html)} caracteres)"
+        logger.info(msg)
+        return html, msg
+
+    if erro and "Executable doesn't exist" in erro:
+        resultado_instalacao = _garantir_navegador_playwright_instalado()
+        if "sucesso" in resultado_instalacao:
+            html, erro2 = _tentar_uma_vez()
+            if html is not None:
+                msg = (
+                    f"{url} -> Playwright OK após autoinstalação em tempo de "
+                    f"execução ({len(html)} caracteres)"
+                )
+                logger.info(msg)
+                return html, msg
+            msg = f"{url} -> Playwright falhou mesmo após autoinstalação: {erro2}"
+            logger.warning(msg)
+            return None, msg
+        msg = f"{url} -> Playwright falhou: {erro}; {resultado_instalacao}"
+        logger.warning(msg)
+        return None, msg
+
+    msg = f"{url} -> Playwright falhou: {erro}"
+    logger.warning(msg)
+    return None, msg
+
 
 def _garantir_navegador_playwright_instalado() -> str:
     """Rede de segurança: se o Chromium do Playwright não estiver
@@ -202,90 +323,6 @@ def _garantir_navegador_playwright_instalado() -> str:
         logger.warning("Instalação em tempo de execução falhou: %s", exc)
         return f"instalação em tempo de execução também falhou ({exc})"
 
-
-def _buscar_pagina_playwright(url: str) -> Tuple[Optional[str], str]:
-    """Busca uma página usando um navegador de verdade (headless), via
-    Playwright. Isso executa o JavaScript da página como um navegador
-    normal faria — necessário para portais que só entregam o conteúdo real
-    depois de carregar dados via JavaScript, ou que servem uma página
-    "vazia" de propósito para pedidos que reconhecem como automatizados
-    (requests/cloudscraper não executam JavaScript, então não conseguem
-    superar essa barreira).
-
-    Mais lento e pesado que um pedido HTTP comum — por isso só é usado como
-    último recurso, depois que a tentativa rápida (requests/cloudscraper)
-    falhou ou voltou sem conteúdo de verdade.
-
-    Se o navegador não estiver instalado, tenta se autoinstalar uma vez
-    (ver _garantir_navegador_playwright_instalado) e repete a tentativa.
-    """
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError as exc:
-        msg = f"{url} -> Playwright não está instalado neste ambiente ({exc})"
-        logger.warning(msg)
-        return None, msg
-
-    def _tentar_uma_vez() -> Tuple[Optional[str], Optional[str]]:
-        """Devolve (html, None) em sucesso, ou (None, mensagem_de_erro)."""
-        try:
-            with sync_playwright() as p:
-                navegador = p.chromium.launch(
-                    headless=True,
-                    args=["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage"],
-                )
-                try:
-                    contexto = navegador.new_context(
-                        user_agent=HEADERS["User-Agent"],
-                        locale="pt-BR",
-                        viewport={"width": 1280, "height": 800},
-                    )
-                    pagina = contexto.new_page()
-
-                    def _bloquear_recursos_pesados(rota):
-                        if rota.request.resource_type in ("image", "media", "font"):
-                            rota.abort()
-                        else:
-                            rota.continue_()
-
-                    pagina.route("**/*", _bloquear_recursos_pesados)
-                    pagina.goto(url, wait_until="domcontentloaded", timeout=12000)
-                    pagina.wait_for_timeout(1500)
-                    html = pagina.content()
-                finally:
-                    navegador.close()
-            return html, None
-        except Exception as exc:
-            return None, str(exc)
-
-    html, erro = _tentar_uma_vez()
-
-    if html is not None:
-        msg = f"{url} -> Playwright (navegador real) OK ({len(html)} caracteres)"
-        logger.info(msg)
-        return html, msg
-
-    if erro and "Executable doesn't exist" in erro:
-        resultado_instalacao = _garantir_navegador_playwright_instalado()
-        if "sucesso" in resultado_instalacao:
-            html, erro2 = _tentar_uma_vez()
-            if html is not None:
-                msg = (
-                    f"{url} -> Playwright OK após autoinstalação em tempo de "
-                    f"execução ({len(html)} caracteres)"
-                )
-                logger.info(msg)
-                return html, msg
-            msg = f"{url} -> Playwright falhou mesmo após autoinstalação: {erro2}"
-            logger.warning(msg)
-            return None, msg
-        msg = f"{url} -> Playwright falhou: {erro}; {resultado_instalacao}"
-        logger.warning(msg)
-        return None, msg
-
-    msg = f"{url} -> Playwright falhou: {erro}"
-    logger.warning(msg)
-    return None, msg
 
 
 def _buscar_pagina(url: str, marcador_de_conteudo: Optional[str] = None) -> Tuple[Optional[str], str]:
@@ -572,12 +609,28 @@ def buscar_chavesnamao(
 
     if tipo and tipo in TIPO_PARA_SLUG_CHAVESNAMAO:
         slugs_categoria = [TIPO_PARA_SLUG_CHAVESNAMAO[tipo]]
-        paginas_por_categoria = max_paginas or PAGINA_MAXIMA_PERMITIDA_CHAVESNAMAO
+        # Reduzido de 5 para 3 por padrão: mesmo reaproveitando o
+        # navegador entre páginas (bem mais rápido que antes), 5 páginas
+        # ainda é arriscado dentro do tempo que o Render permite por
+        # requisição. Quem quiser as 5 pode pedir explicitamente via
+        # max_paginas.
+        paginas_por_categoria = max_paginas or 3
     else:
         slugs_categoria = TIPOS_AMPLOS_PADRAO_CHAVESNAMAO
-        paginas_por_categoria = max_paginas or 2
+        # Reduzido de 2 para 1 por padrão quando várias categorias são
+        # combinadas — 4 categorias × múltiplas páginas cada é a
+        # combinação que mais facilmente estoura o tempo do Render.
+        paginas_por_categoria = max_paginas or 1
 
     paginas_por_categoria = max(1, min(paginas_por_categoria, PAGINA_MAXIMA_PERMITIDA_CHAVESNAMAO))
+
+    # Limite de tempo total de segurança: mesmo com o navegador
+    # reaproveitado, uma busca com muitas páginas/categorias ainda pode
+    # demorar demais. Paramos de buscar páginas NOVAS assim que esse
+    # orçamo de tempo é ultrapassado (o que já foi buscado até então é
+    # aproveitado normalmente).
+    tempo_inicio = time.time()
+    ORCAMENTO_TEMPO_SEGUNDOS = 70
 
     links_vistos = set()
 
@@ -585,6 +638,14 @@ def buscar_chavesnamao(
         url_base = f"https://www.chavesnamao.com.br/{slug_categoria}/{slug_uf}-{slug_cidade}/"
 
         for pagina in range(1, paginas_por_categoria + 1):
+            if time.time() - tempo_inicio > ORCAMENTO_TEMPO_SEGUNDOS:
+                diagnosticos.append(
+                    f"{url_base} -> busca interrompida por limite de tempo "
+                    f"de segurança ({ORCAMENTO_TEMPO_SEGUNDOS}s) — resultados "
+                    "encontrados até aqui foram mantidos"
+                )
+                return imoveis, diagnosticos
+
             url = url_base if pagina == 1 else f"{url_base}?pg={pagina}"
             html, diag = _buscar_pagina(url, marcador_de_conteudo="/imovel/")
 
