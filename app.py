@@ -86,8 +86,11 @@ def buscar():
     uf = request.form.get("uf", "").strip()
     tipo = request.form.get("tipo", "").strip() or None
     quartos_min = request.form.get("quartos_min", "").strip()
+    quartos_max = request.form.get("quartos_max", "").strip()
     banheiros_min = request.form.get("banheiros_min", "").strip()
+    banheiros_max = request.form.get("banheiros_max", "").strip()
     area_min = request.form.get("area_min", "").strip()
+    area_max = request.form.get("area_max", "").strip()
     preco_min = request.form.get("preco_min", "").strip()
     preco_max = request.form.get("preco_max", "").strip()
 
@@ -109,8 +112,11 @@ def buscar():
             uf=uf,
             tipo=tipo,
             quartos_min=to_int(quartos_min),
+            quartos_max=to_int(quartos_max),
             banheiros_min=to_int(banheiros_min),
+            banheiros_max=to_int(banheiros_max),
             area_min=to_float(area_min),
+            area_max=to_float(area_max),
             preco_min=to_float(preco_min),
             preco_max=to_float(preco_max),
         )

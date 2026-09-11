@@ -96,7 +96,7 @@
 </header>
 
 <div class="container">
-    <form id="form-busca" action="/buscar" method="post" onsubmit="mostrarCarregando()">
+    <form id="form-busca" action="/buscar" method="post" onsubmit="return validarEEnviar()">
         <div class="linha">
             <div class="campo" style="flex: 2;">
                 <label for="cidade">Cidade</label>
@@ -131,12 +131,30 @@
                 <input type="number" id="quartos_min" name="quartos_min" min="0" placeholder="Ex: 2">
             </div>
             <div class="campo">
+                <label for="quartos_max">Dormitórios (máx.)</label>
+                <input type="number" id="quartos_max" name="quartos_max" min="0" placeholder="Ex: 4">
+            </div>
+        </div>
+
+        <div class="linha">
+            <div class="campo">
                 <label for="banheiros_min">Banheiros (mín.)</label>
                 <input type="number" id="banheiros_min" name="banheiros_min" min="0" placeholder="Ex: 1">
             </div>
             <div class="campo">
+                <label for="banheiros_max">Banheiros (máx.)</label>
+                <input type="number" id="banheiros_max" name="banheiros_max" min="0" placeholder="Ex: 3">
+            </div>
+        </div>
+
+        <div class="linha">
+            <div class="campo">
                 <label for="area_min">Área mín. (m²)</label>
                 <input type="number" id="area_min" name="area_min" min="0" placeholder="Ex: 50">
+            </div>
+            <div class="campo">
+                <label for="area_max">Área máx. (m²)</label>
+                <input type="number" id="area_max" name="area_max" min="0" placeholder="Ex: 200">
             </div>
         </div>
 
@@ -181,6 +199,27 @@
 <script>
 function mostrarCarregando() {
     document.getElementById('carregando').style.display = 'block';
+}
+
+function validarEEnviar() {
+    const pares = [
+        ['quartos_min', 'quartos_max', 'Dormitórios'],
+        ['banheiros_min', 'banheiros_max', 'Banheiros'],
+        ['area_min', 'area_max', 'Área'],
+        ['preco_min', 'preco_max', 'Preço'],
+    ];
+
+    for (const [idMin, idMax, rotulo] of pares) {
+        const min = document.getElementById(idMin).value;
+        const max = document.getElementById(idMax).value;
+        if (min !== '' && max !== '' && parseFloat(max) < parseFloat(min)) {
+            alert(`O valor máximo de "${rotulo}" não pode ser menor que o mínimo.`);
+            return false;
+        }
+    }
+
+    mostrarCarregando();
+    return true;
 }
 </script>
 

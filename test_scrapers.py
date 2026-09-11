@@ -525,6 +525,70 @@ class TestFiltros(unittest.TestCase):
         )
         self.assertEqual(len(resultado), 1)
 
+    def test_filtro_quartos_maximo(self):
+        imoveis = [
+            scrapers.Imovel(portal="X", titulo="Casa A", link="a", quartos=2),
+            scrapers.Imovel(portal="X", titulo="Casa B", link="b", quartos=3),
+            scrapers.Imovel(portal="X", titulo="Casa C", link="c", quartos=5),
+        ]
+        resultado = scrapers._aplica_filtros_basicos(
+            imoveis, tipo=None, quartos_min=None, banheiros_min=None,
+            area_min=None, preco_min=None, preco_max=None, quartos_max=3,
+        )
+        titulos = sorted(im.titulo for im in resultado)
+        self.assertEqual(titulos, ["Casa A", "Casa B"])
+
+    def test_filtro_quartos_min_e_max_juntos(self):
+        imoveis = [
+            scrapers.Imovel(portal="X", titulo="Casa A", link="a", quartos=1),
+            scrapers.Imovel(portal="X", titulo="Casa B", link="b", quartos=3),
+            scrapers.Imovel(portal="X", titulo="Casa C", link="c", quartos=6),
+        ]
+        resultado = scrapers._aplica_filtros_basicos(
+            imoveis, tipo=None, quartos_min=2, banheiros_min=None,
+            area_min=None, preco_min=None, preco_max=None, quartos_max=4,
+        )
+        self.assertEqual(len(resultado), 1)
+        self.assertEqual(resultado[0].titulo, "Casa B")
+
+    def test_filtro_banheiros_maximo(self):
+        imoveis = [
+            scrapers.Imovel(portal="X", titulo="Casa A", link="a", banheiros=1),
+            scrapers.Imovel(portal="X", titulo="Casa B", link="b", banheiros=4),
+        ]
+        resultado = scrapers._aplica_filtros_basicos(
+            imoveis, tipo=None, quartos_min=None, banheiros_min=None,
+            area_min=None, preco_min=None, preco_max=None, banheiros_max=2,
+        )
+        self.assertEqual(len(resultado), 1)
+        self.assertEqual(resultado[0].titulo, "Casa A")
+
+    def test_filtro_area_maxima(self):
+        imoveis = [
+            scrapers.Imovel(portal="X", titulo="Apto pequeno", link="a", area_m2=45),
+            scrapers.Imovel(portal="X", titulo="Apto grande", link="b", area_m2=250),
+        ]
+        resultado = scrapers._aplica_filtros_basicos(
+            imoveis, tipo=None, quartos_min=None, banheiros_min=None,
+            area_min=None, preco_min=None, preco_max=None, area_max=100,
+        )
+        self.assertEqual(len(resultado), 1)
+        self.assertEqual(resultado[0].titulo, "Apto pequeno")
+
+    def test_dado_ausente_nao_e_descartado_pelo_filtro_maximo(self):
+        # Um imóvel sem número de quartos identificado não deve ser
+        # descartado só porque um filtro MÁXIMO foi definido — a regra é a
+        # mesma já usada para os filtros mínimos: dado ausente = não sabemos,
+        # então não excluímos por precaução.
+        imoveis = [
+            scrapers.Imovel(portal="X", titulo="Terreno", link="c", quartos=None),
+        ]
+        resultado = scrapers._aplica_filtros_basicos(
+            imoveis, tipo=None, quartos_min=None, banheiros_min=None,
+            area_min=None, preco_min=None, preco_max=None, quartos_max=2,
+        )
+        self.assertEqual(len(resultado), 1)
+
 
 class TestBuscarTodosPortais(unittest.TestCase):
     @patch("scrapers.buscar_chavesnamao")

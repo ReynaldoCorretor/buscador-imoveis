@@ -7,6 +7,22 @@ aparecem numa única página, com link direto para o anúncio original, e
 podem ser filtrados/ordenados no próprio navegador sem precisar buscar de
 novo.
 
+## Status atual (filtros com mínimo E máximo)
+
+Adicionados campos de máximo para dormitórios, banheiros e área (antes só
+havia mínimo). Agora dá para especificar faixas, por exemplo "de 2 a 4
+dormitórios" ou "de 50m² a 120m²", em vez de só um piso. Os campos de
+máximo são opcionais — se deixar em branco, funciona como antes (sem
+limite superior). Um imóvel cujo dado (quartos/banheiros/área) não foi
+identificado automaticamente continua NÃO sendo descartado por nenhum
+desses filtros — a mesma regra de "dado ausente = não sabemos, não
+excluímos por precaução" que já valia para os mínimos agora vale também
+para os máximos.
+
+Pequena validação foi adicionada no formulário: se o máximo for menor que
+o mínimo em qualquer par de campos, aparece um aviso antes de enviar a
+busca.
+
 ## Status atual (correção de erro 502 — navegador reaproveitado)
 
 Depois de habilitar a busca em várias páginas, a busca começou a dar erro

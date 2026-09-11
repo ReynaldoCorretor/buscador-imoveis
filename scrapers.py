@@ -438,6 +438,9 @@ def _aplica_filtros_basicos(
     area_min: Optional[float],
     preco_min: Optional[float],
     preco_max: Optional[float],
+    quartos_max: Optional[int] = None,
+    banheiros_max: Optional[int] = None,
+    area_max: Optional[float] = None,
 ) -> List[Imovel]:
     resultado = []
     for im in imoveis:
@@ -445,9 +448,15 @@ def _aplica_filtros_basicos(
             continue
         if quartos_min and im.quartos is not None and im.quartos < quartos_min:
             continue
+        if quartos_max and im.quartos is not None and im.quartos > quartos_max:
+            continue
         if banheiros_min and im.banheiros is not None and im.banheiros < banheiros_min:
             continue
+        if banheiros_max and im.banheiros is not None and im.banheiros > banheiros_max:
+            continue
         if area_min and im.area_m2 is not None and im.area_m2 < area_min:
+            continue
+        if area_max and im.area_m2 is not None and im.area_m2 > area_max:
             continue
         if preco_min and im.preco is not None and im.preco < preco_min:
             continue
@@ -888,6 +897,9 @@ def buscar_todos_portais(
     area_min: Optional[float] = None,
     preco_min: Optional[float] = None,
     preco_max: Optional[float] = None,
+    quartos_max: Optional[int] = None,
+    banheiros_max: Optional[int] = None,
+    area_max: Optional[float] = None,
 ) -> dict:
     """Roda os scrapers dos portais ATIVOS (ver PORTAIS_ATIVOS) e devolve um
     dicionário com resultados por portal, lista combinada já filtrada, e um
@@ -927,7 +939,8 @@ def buscar_todos_portais(
             # diferente do nome exato do tipo.
             tipo_para_filtro_extra = None if nome == "Chaves na Mão" else tipo
             imoveis_filtrados = _aplica_filtros_basicos(
-                imoveis, tipo_para_filtro_extra, quartos_min, banheiros_min, area_min, preco_min, preco_max
+                imoveis, tipo_para_filtro_extra, quartos_min, banheiros_min, area_min,
+                preco_min, preco_max, quartos_max, banheiros_max, area_max,
             )
             resultados_por_portal[nome] = [im.to_dict() for im in imoveis_filtrados]
             diagnosticos_por_portal[nome] = diagnosticos
