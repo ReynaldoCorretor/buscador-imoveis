@@ -1,9 +1,0 @@
-__pycache__/
-*.pyc
-*.pyo
-.git
-.gitignore
-.pytest_cache/
-render.yaml
-Procfile
-README.md
