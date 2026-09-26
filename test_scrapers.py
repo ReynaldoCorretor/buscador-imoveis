@@ -141,16 +141,18 @@ class TestChavesNaMao(unittest.TestCase):
         urls_chamadas = [c[0][0] for c in mock_buscar.call_args_list]
         for slug in scrapers.TIPOS_AMPLOS_PADRAO_CHAVESNAMAO:
             self.assertTrue(any(slug in u for u in urls_chamadas))
-        # Padrão atual: 1 página por categoria quando nenhum tipo é
-        # especificado (reduzido de 2 para 1 por segurança de tempo) — 4
-        # categorias × 1 página = 4 chamadas.
-        self.assertEqual(mock_buscar.call_count, 4)
+        # Padrão atual: até 2 páginas por categoria quando nenhum tipo é
+        # especificado. Como o mock sempre devolve o MESMO link, a 1ª
+        # categoria tenta página 1 (1 novo) e página 2 (0 novos -> para),
+        # e as demais categorias já começam "sem novidade" e param na
+        # própria página 1 — total: 2 + 1 + 1 + 1 = 5.
+        self.assertEqual(mock_buscar.call_count, 5)
 
     @patch("scrapers._buscar_pagina")
     def test_tipo_desconhecido_cai_no_padrao_amplo(self, mock_buscar):
         mock_buscar.return_value = (HTML_CHAVESNAMAO_SINTETICO, "OK")
         scrapers.buscar_chavesnamao("Mogi das Cruzes", "SP", tipo="Tipo Que Não Existe")
-        self.assertEqual(mock_buscar.call_count, 4)  # mesmo padrão do teste acima
+        self.assertEqual(mock_buscar.call_count, 5)  # mesmo padrão do teste acima
 
     @patch("scrapers._buscar_pagina")
     def test_pagina_maxima_respeitada_e_nao_ultrapassa_5(self, mock_buscar):

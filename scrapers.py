@@ -618,18 +618,16 @@ def buscar_chavesnamao(
 
     if tipo and tipo in TIPO_PARA_SLUG_CHAVESNAMAO:
         slugs_categoria = [TIPO_PARA_SLUG_CHAVESNAMAO[tipo]]
-        # Reduzido de 5 para 3 por padrão: mesmo reaproveitando o
-        # navegador entre páginas (bem mais rápido que antes), 5 páginas
-        # ainda é arriscado dentro do tempo que o Render permite por
-        # requisição. Quem quiser as 5 pode pedir explicitamente via
-        # max_paginas.
-        paginas_por_categoria = max_paginas or 3
+        # Com o navegador Playwright reaproveitado entre páginas (não abre
+        # mais um novo a cada vez), 5 páginas — o máximo permitido pelo
+        # robots.txt — já cabe com folga no tempo que o Render permite.
+        paginas_por_categoria = max_paginas or PAGINA_MAXIMA_PERMITIDA_CHAVESNAMAO
     else:
         slugs_categoria = TIPOS_AMPLOS_PADRAO_CHAVESNAMAO
-        # Reduzido de 2 para 1 por padrão quando várias categorias são
-        # combinadas — 4 categorias × múltiplas páginas cada é a
-        # combinação que mais facilmente estoura o tempo do Render.
-        paginas_por_categoria = max_paginas or 1
+        # Aumentado de 1 para 2: com o navegador reaproveitado, buscar 2
+        # páginas de cada uma das 4 categorias (até 8 páginas no total)
+        # ainda cabe dentro do orçamento de tempo de segurança abaixo.
+        paginas_por_categoria = max_paginas or 2
 
     paginas_por_categoria = max(1, min(paginas_por_categoria, PAGINA_MAXIMA_PERMITIDA_CHAVESNAMAO))
 
@@ -637,9 +635,11 @@ def buscar_chavesnamao(
     # reaproveitado, uma busca com muitas páginas/categorias ainda pode
     # demorar demais. Paramos de buscar páginas NOVAS assim que esse
     # orçamo de tempo é ultrapassado (o que já foi buscado até então é
-    # aproveitado normalmente).
+    # aproveitado normalmente). Aumentado de 70 para 85s — ainda com boa
+    # margem antes do limite de ~100s do Render — para acomodar a amostra
+    # maior (mais páginas por padrão) sem voltar a arriscar erro 502.
     tempo_inicio = time.time()
-    ORCAMENTO_TEMPO_SEGUNDOS = 70
+    ORCAMENTO_TEMPO_SEGUNDOS = 85
 
     links_vistos = set()
 

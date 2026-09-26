@@ -7,6 +7,36 @@ aparecem numa única página, com link direto para o anúncio original, e
 podem ser filtrados/ordenados no próprio navegador sem precisar buscar de
 novo.
 
+## Status atual (amostra maior — mais páginas por padrão)
+
+Reynaldo percebeu que buscar direto no Chaves na Mão com certos filtros
+(1 quarto, até R$650mil, 35-45m²) trazia 31 resultados no site, mas o
+nosso buscador trazia só 1. Motivo: o buscador não manda os filtros na
+busca em si — ele pega uma amostra (páginas sem filtro) e filtra depois,
+localmente. Quanto menor a amostra, maior a chance de os imóveis que batem
+com filtros bem específicos não estarem nela.
+
+Também descobrimos que o formato de busca filtrada de verdade do site
+(`?filtro=ban:2,pmax:650000,amin:35,amax:45`) é bloqueado pelo robots.txt
+— só path (sem `?`) é permitido, então não dá para usar a busca filtrada
+nativa do site sem violar isso.
+
+### O que mudou
+
+Aumentamos o tamanho da amostra (mais páginas buscadas por padrão), já que
+o navegador Playwright reaproveitado deixou cada página bem mais rápida de
+buscar:
+- Tipo específico: agora busca até **5 páginas** por padrão (era 3) — o
+  máximo que o robots.txt permite.
+- Combinando várias categorias (sem tipo definido): agora busca até **2
+  páginas por categoria** (era 1).
+- Orçamento de tempo de segurança aumentado de 70 para **85 segundos**
+  para acomodar a amostra maior sem voltar a arriscar erro 502 no Render.
+
+Isso não resolve 100% o problema (ainda é uma amostra, não a busca
+filtrada completa do site), mas deve trazer bem mais resultados para
+filtros específicos do que antes.
+
 ## Status atual (filtros com mínimo E máximo)
 
 Adicionados campos de máximo para dormitórios, banheiros e área (antes só
