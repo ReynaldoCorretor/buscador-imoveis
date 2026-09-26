@@ -7,7 +7,37 @@ aparecem numa única página, com link direto para o anúncio original, e
 podem ser filtrados/ordenados no próprio navegador sem precisar buscar de
 novo.
 
-## Status atual (amostra maior — mais páginas por padrão)
+## Status atual (causa raiz encontrada: faltavam categorias compactas)
+
+Mesmo depois de aumentar a amostra (mais páginas), o teste de "1 quarto,
+2 banheiros, até R$650mil, 35-45m²" continuou trazendo só 1 resultado. A
+causa real: com "Qualquer tipo" selecionado, a busca combinava só 4
+categorias — **casas, apartamentos, casas em condomínio e terrenos**.
+Um imóvel de 35-45m²/1 quarto é quase sempre um apartamento pequeno,
+kitnet, flat ou loft — categorias que **não estavam** na lista. Das 4
+categorias buscadas, só 1 (apartamentos) tinha qualquer chance de conter
+o que era procurado.
+
+### O que mudou
+
+A lista de categorias combinadas (usada quando "Qualquer tipo" está
+selecionado) foi ampliada de 4 para 8:
+`apartamentos-a-venda`, `casas-a-venda`, `kitnet-a-venda`, `flat-a-venda`,
+`casas-em-condominio-a-venda`, `coberturas-a-venda`, `loft-a-venda`,
+`terrenos-a-venda`.
+
+Para não voltar a arriscar o tempo limite do Render, o padrão de páginas
+por categoria nesse modo voltou de 2 para **1** (mais categorias, menos
+profundidade em cada uma — prioriza amplitude quando o tipo não é
+conhecido).
+
+**Recomendação para buscas mais precisas**: se você já sabe o tipo que
+procura (ex: "Apartamento" ou "Kitnet"), selecionar isso no formulário
+continua sendo a opção mais forte — nesse caso a busca vai até 5 páginas
+só daquele tipo, em vez de 1 página de cada uma das 8 categorias
+combinadas. O formulário agora sugere isso explicitamente.
+
+
 
 Reynaldo percebeu que buscar direto no Chaves na Mão com certos filtros
 (1 quarto, até R$650mil, 35-45m²) trazia 31 resultados no site, mas o

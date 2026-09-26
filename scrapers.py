@@ -563,10 +563,23 @@ TIPO_PARA_SLUG_CHAVESNAMAO = {
 # quantidade de resultados SEM violar o robots.txt do portal — que
 # bloqueia paginação dentro de uma mesma categoria, não o acesso a
 # categorias diferentes (cada uma tem sua própria "página 1" permitida).
+#
+# IMPORTANTE (corrigido depois que um teste real com "1 quarto, 35-45m²"
+# trouxe só 1 resultado nosso contra 31 no site): a lista original tinha
+# só casas/apartamentos/condomínio/terrenos — nenhuma categoria de imóvel
+# COMPACTO (kitnet, flat, loft, cobertura), que é exatamente onde estão os
+# imóveis pequenos de 1-2 quartos. Terreno também tem baixa relevância
+# aqui (não tem quartos/banheiros) mas foi mantido para não reduzir a
+# cobertura de quem busca terrenos. Lista ampliada para cobrir melhor
+# tanto casas maiores quanto unidades compactas.
 TIPOS_AMPLOS_PADRAO_CHAVESNAMAO = [
-    "casas-a-venda",
     "apartamentos-a-venda",
+    "casas-a-venda",
+    "kitnet-a-venda",
+    "flat-a-venda",
     "casas-em-condominio-a-venda",
+    "coberturas-a-venda",
+    "loft-a-venda",
     "terrenos-a-venda",
 ]
 
@@ -624,10 +637,13 @@ def buscar_chavesnamao(
         paginas_por_categoria = max_paginas or PAGINA_MAXIMA_PERMITIDA_CHAVESNAMAO
     else:
         slugs_categoria = TIPOS_AMPLOS_PADRAO_CHAVESNAMAO
-        # Aumentado de 1 para 2: com o navegador reaproveitado, buscar 2
-        # páginas de cada uma das 4 categorias (até 8 páginas no total)
-        # ainda cabe dentro do orçamento de tempo de segurança abaixo.
-        paginas_por_categoria = max_paginas or 2
+        # Voltado para 1 página por categoria: a lista de categorias
+        # cresceu de 4 para 8 (para cobrir imóveis compactos como kitnet/
+        # flat/loft, que estavam faltando) — com 8 categorias, manter 2
+        # páginas cada arriscaria estourar o tempo do Render de novo.
+        # Priorizamos amplitude (mais categorias) sobre profundidade (mais
+        # páginas por categoria) neste modo "Qualquer tipo".
+        paginas_por_categoria = max_paginas or 1
 
     paginas_por_categoria = max(1, min(paginas_por_categoria, PAGINA_MAXIMA_PERMITIDA_CHAVESNAMAO))
 
