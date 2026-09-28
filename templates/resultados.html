@@ -169,13 +169,19 @@
         <div class="campo-filtro">
             <label style="visibility:hidden;">.</label>
             <label style="font-weight:400; font-size:0.85rem;">
-                <input type="checkbox" id="f-ocultar-incompletos" onchange="aplicarFiltros()">
+                <input type="checkbox" id="f-ocultar-incompletos" checked onchange="aplicarFiltros()">
                 Ocultar dados incompletos
             </label>
         </div>
     </div>
 
     <div class="resumo" id="resumo">{{ total }} imóveis encontrados</div>
+    <p style="font-size:0.82rem; color:#777; margin-top:-8px; margin-bottom:14px;">
+        Por padrão, imóveis com quartos/área/preço não identificados ficam
+        ocultos (eles podem não bater com os filtros que você pediu, mesmo
+        aparecendo na busca). Desmarque "Ocultar dados incompletos" acima
+        para ver esses casos também.
+    </p>
 
     <div class="lista-imoveis" id="lista-imoveis"></div>
     <div class="vazio" id="vazio" style="display:none;">Nenhum imóvel encontrado com esses filtros.</div>
@@ -268,7 +274,7 @@ function aplicarFiltros() {
     renderizar(lista);
 }
 
-renderizar(todosImoveis);
+aplicarFiltros();  // aplica o "Ocultar dados incompletos" (marcado por padrão) já na 1ª exibição
 </script>
 
 </body>

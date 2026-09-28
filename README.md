@@ -7,6 +7,35 @@ aparecem numa única página, com link direto para o anúncio original, e
 podem ser filtrados/ordenados no próprio navegador sem precisar buscar de
 novo.
 
+## Status atual ("Ocultar dados incompletos" agora vem marcado por padrão)
+
+Reynaldo testou com filtros específicos (3 quartos, 2-3 banheiros,
+90-120m²) e um dos resultados era um imóvel de 1 quarto/26m² — totalmente
+fora do pedido. Causa: esse anúncio tinha "dados incompletos" (nosso
+extrator não conseguiu ler quartos/área a partir do link dele), e a regra
+"dado ausente não é descartado por precaução" deixou ele passar pelos
+filtros mesmo sem bater com nada.
+
+### O que mudou
+
+A caixinha **"Ocultar dados incompletos"**, que já existia na tela de
+resultados mas vinha desmarcada, agora **vem marcada por padrão**. Isso
+significa que, por padrão, só aparecem imóveis cujos dados foram
+identificados com confiança — reduzindo bastante a chance de mostrar algo
+que não bate com o que foi pedido. Quem quiser ver os casos "incertos"
+também (podem incluir imóveis relevantes que só não foram bem
+interpretados) pode desmarcar a caixinha manualmente.
+
+Também corrigido um bug pequeno: antes, esse filtro só era aplicado depois
+que o usuário mexia em algum controle da tela — agora já é aplicado
+automaticamente assim que a página carrega, respeitando o padrão marcado.
+
+**Isso não resolve o problema de origem** (a extração falhar para certos
+anúncios) — só evita que esses casos incertos apareçam misturados sem
+aviso. Se você mandar o link de um anúncio específico que apareceu errado,
+dá para investigar por que a extração falhou nele e talvez corrigir o
+padrão de busca (regex) para capturar certo da próxima vez.
+
 ## Status atual (causa raiz encontrada: faltavam categorias compactas)
 
 Mesmo depois de aumentar a amostra (mais páginas), o teste de "1 quarto,
