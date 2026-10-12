@@ -450,6 +450,17 @@ def _aplica_filtros_basicos(
             continue
         if quartos_max and im.quartos is not None and im.quartos > quartos_max:
             continue
+        # Banheiros é tratado de forma mais rígida que os outros campos:
+        # o Chaves na Mão não informa o número de banheiros na tela de
+        # busca (só no anúncio individual aberto), então essa informação
+        # é SEMPRE ausente para esse portal — não é uma falha pontual de
+        # extração como pode acontecer com quartos/área/preço. Por isso,
+        # quando o usuário define um filtro de banheiros, excluímos os
+        # imóveis sem essa informação em vez de deixar passar "por
+        # precaução" (como fazemos para os outros campos) — do contrário
+        # o filtro de banheiros nunca excluiria nada de verdade.
+        if (banheiros_min or banheiros_max) and im.banheiros is None:
+            continue
         if banheiros_min and im.banheiros is not None and im.banheiros < banheiros_min:
             continue
         if banheiros_max and im.banheiros is not None and im.banheiros > banheiros_max:
@@ -501,10 +512,15 @@ def buscar_vivareal(cidade: str, uf: str, tipo: Optional[str] = None, max_pagina
             preco_match = re.search(r"[Vv]enda-RS(\d+)", link)
             preco = float(preco_match.group(1)) if preco_match else None
 
-            area_match = re.search(r"-(\d{2,4})m2-", link)
+            # Corrigido: limites de dígitos ampliados. Antes, "-(\d{2,4})m2-"
+            # não capturava áreas muito grandes (ex: terrenos/chácaras de
+            # 115.600m²) e "(\d)-quartos?-" capturava só 1 dígito, cortando
+            # por engano "23-quartos" para "3" em vez de descartar como
+            # não encontrado.
+            area_match = re.search(r"-(\d{1,7})m2-", link)
             area = float(area_match.group(1)) if area_match else None
 
-            quartos_match = re.search(r"(\d)-quartos?-", slug)
+            quartos_match = re.search(r"(\d{1,2})-quartos?-", slug)
             quartos = int(quartos_match.group(1)) if quartos_match else None
 
             titulo = slug.replace("-", " ").replace("id ", "").strip().title()
@@ -705,12 +721,22 @@ def buscar_chavesnamao(
                 preco_match = re.search(r"RS(\d+)", link)
                 preco = float(preco_match.group(1)) if preco_match else None
 
-                area_match = re.search(r"-(\d{2,5})m2-", link)
+                # Corrigido: limites de dígitos ampliados. Antes,
+                # "-(\d{2,5})m2-" não capturava áreas muito grandes (ex:
+                # terrenos/chácaras de 115.600m²) e "(\d)-quartos?-"
+                # capturava só 1 dígito, cortando por engano "23-quartos"
+                # para "3" em vez de extrair o valor certo ou descartar.
+                area_match = re.search(r"-(\d{1,7})m2-", link)
                 area = float(area_match.group(1)) if area_match else None
 
-                quartos_match = re.search(r"(\d)-quartos?-", link)
+                quartos_match = re.search(r"(\d{1,2})-quartos?-", link)
                 quartos = int(quartos_match.group(1)) if quartos_match else None
 
+                # O Chaves na Mão NÃO inclui o número de banheiros no link
+                # nem no título do anúncio na tela de busca (só aparece ao
+                # abrir o anúncio individual) — por isso banheiros fica
+                # sempre None aqui. Isso é uma limitação do próprio site,
+                # não um bug de extração.
                 titulo = slug.replace("-", " ").title()
                 incompleto = preco is None or area is None or quartos is None
 

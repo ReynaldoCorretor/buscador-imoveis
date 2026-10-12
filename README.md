@@ -7,6 +7,32 @@ aparecem numa única página, com link direto para o anúncio original, e
 podem ser filtrados/ordenados no próprio navegador sem precisar buscar de
 novo.
 
+## Status atual (bugs de extração: quartos de 2 dígitos, áreas grandes e banheiros)
+
+Reynaldo testou com filtros (3 quartos, 2-3 banheiros, 90-120m²) e
+recebeu 7 resultados, alguns fora do pedido. Comparando os cards com os
+anúncios reais, apareceram três problemas distintos:
+
+1. **Quartos de 2 dígitos cortados**: um anúncio de **23 quartos** aparecia
+   como "3 dorm." porque o regex só capturava 1 dígito. Isso fazia o imóvel
+   passar por engano no filtro "3 a 3 quartos". Corrigido (agora aceita
+   1-2 dígitos).
+2. **Áreas grandes não capturadas**: o mesmo anúncio tem 115.600m², mas o
+   regex só aceitava até 5 dígitos, então a área ficava "incompleta".
+   Corrigido (agora aceita até 7 dígitos).
+3. **Banheiros nunca existiram nos dados do Chaves na Mão**: o site não
+   publica o nº de banheiros no link/título da busca (só no anúncio
+   aberto). Antes, o filtro de banheiros nunca excluía nada, e o card
+   aparecia como "completo". Agora, **se você preencher um filtro de
+   banheiros, imóveis sem essa informação são excluídos** (em vez de
+   passar por precaução) — o que reduz bastante os resultados. O
+   formulário avisa sobre isso. Para ver mais opções, deixe o filtro de
+   banheiros em branco e confira os banheiros no anúncio.
+
+Observação: o card com etiqueta "dados incompletos" visível indica que o
+deploy testado ainda não tinha a caixinha "Ocultar dados incompletos"
+marcada por padrão (ver seção abaixo) — é preciso subir a versão nova.
+
 ## Status atual ("Ocultar dados incompletos" agora vem marcado por padrão)
 
 Reynaldo testou com filtros específicos (3 quartos, 2-3 banheiros,

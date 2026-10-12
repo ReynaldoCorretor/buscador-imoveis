@@ -109,6 +109,43 @@ class TestVivaReal(unittest.TestCase):
 
 class TestChavesNaMao(unittest.TestCase):
     @patch("scrapers._buscar_pagina")
+    def test_quartos_de_dois_digitos_nao_e_cortado(self, mock_buscar):
+        # Caso real reportado: "23-quartos" estava virando "3" (regex
+        # antigo só capturava 1 dígito).
+        html = (
+            '<html><a href="/imovel/casa-a-venda-23-quartos-com-garagem-sp-'
+            'mogi-das-cruzes-vila-moraes-115600m2-RS17950000/id-999/">Casa</a></html>'
+        )
+        mock_buscar.return_value = (html, "OK")
+        resultado, _ = scrapers.buscar_chavesnamao("Mogi das Cruzes", "SP", tipo="Casa")
+        self.assertEqual(len(resultado), 1)
+        self.assertEqual(resultado[0].quartos, 23)
+
+    @patch("scrapers._buscar_pagina")
+    def test_area_grande_e_capturada_corretamente(self, mock_buscar):
+        # Caso real: 115.600m² (6 dígitos) não era capturado pelo regex
+        # antigo (limitado a 5 dígitos), marcando o imóvel como incompleto
+        # por engano.
+        html = (
+            '<html><a href="/imovel/casa-a-venda-23-quartos-com-garagem-sp-'
+            'mogi-das-cruzes-vila-moraes-115600m2-RS17950000/id-999/">Casa</a></html>'
+        )
+        mock_buscar.return_value = (html, "OK")
+        resultado, _ = scrapers.buscar_chavesnamao("Mogi das Cruzes", "SP", tipo="Casa")
+        self.assertEqual(len(resultado), 1)
+        self.assertEqual(resultado[0].area_m2, 115600.0)
+        self.assertFalse(resultado[0].dados_incompletos)
+
+    @patch("scrapers._buscar_pagina")
+    def test_banheiros_do_chaves_na_mao_sempre_none(self, mock_buscar):
+        # Confirma a limitação estrutural: este portal nunca expõe
+        # banheiros no link/título da busca.
+        mock_buscar.return_value = (HTML_CHAVESNAMAO_SINTETICO, "OK")
+        resultado, _ = scrapers.buscar_chavesnamao("Mogi das Cruzes", "SP", tipo="Casa")
+        self.assertEqual(len(resultado), 1)
+        self.assertIsNone(resultado[0].banheiros)
+
+    @patch("scrapers._buscar_pagina")
     def test_extrai_dados_do_slug(self, mock_buscar):
         mock_buscar.return_value = (HTML_CHAVESNAMAO_SINTETICO, "OK")
         resultado, diagnosticos = scrapers.buscar_chavesnamao("Mogi das Cruzes", "SP")
@@ -565,6 +602,41 @@ class TestFiltros(unittest.TestCase):
         )
         self.assertEqual(len(resultado), 1)
         self.assertEqual(resultado[0].titulo, "Casa A")
+
+    def test_banheiros_ausente_e_excluido_quando_filtro_ativo(self):
+        # Diferente dos outros campos: banheiros é SEMPRE ausente para o
+        # Chaves na Mão (o site não publica isso na busca). Por isso, ao
+        # contrário da regra "dado ausente não é descartado", aqui
+        # EXCLUÍMOS quando o usuário define um filtro de banheiros —
+        # senão o filtro nunca excluiria nada de verdade.
+        imoveis = [
+            scrapers.Imovel(portal="Chaves na Mão", titulo="Casa sem banheiro info",
+                             link="a", banheiros=None),
+        ]
+        resultado_com_filtro = scrapers._aplica_filtros_basicos(
+            imoveis, tipo=None, quartos_min=None, banheiros_min=2,
+            area_min=None, preco_min=None, preco_max=None,
+        )
+        self.assertEqual(len(resultado_com_filtro), 0)
+
+        # Mas sem nenhum filtro de banheiros definido, o imóvel continua
+        # aparecendo normalmente (comportamento inalterado).
+        resultado_sem_filtro = scrapers._aplica_filtros_basicos(
+            imoveis, tipo=None, quartos_min=None, banheiros_min=None,
+            area_min=None, preco_min=None, preco_max=None,
+        )
+        self.assertEqual(len(resultado_sem_filtro), 1)
+
+    def test_banheiros_ausente_excluido_tambem_pelo_maximo(self):
+        imoveis = [
+            scrapers.Imovel(portal="Chaves na Mão", titulo="Casa sem banheiro info",
+                             link="a", banheiros=None),
+        ]
+        resultado = scrapers._aplica_filtros_basicos(
+            imoveis, tipo=None, quartos_min=None, banheiros_min=None,
+            area_min=None, preco_min=None, preco_max=None, banheiros_max=3,
+        )
+        self.assertEqual(len(resultado), 0)
 
     def test_filtro_area_maxima(self):
         imoveis = [
