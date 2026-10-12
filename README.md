@@ -7,6 +7,29 @@ aparecem numa única página, com link direto para o anúncio original, e
 podem ser filtrados/ordenados no próprio navegador sem precisar buscar de
 novo.
 
+## Status atual (timeouts do navegador e categorias irrelevantes)
+
+Teste real com "3 quartos, 90-120m²" (tipo: Qualquer) retornou 0 resultados.
+O diagnóstico mostrou: `apartamentos`, `casas-em-condominio` e `coberturas`
+deram timeout (12s) no navegador, e `loft` nem rodou por causa do limite de
+85s. Só casas, kitnet e flat foram lidos (15 imóveis cada) — categorias
+onde quase nunca há 3 quartos/90-120m².
+
+### O que mudou
+- **Categorias relevantes**: sem tipo definido, a busca descarta categorias
+  incoerentes com os filtros (kitnet/loft com 2+ quartos ou área mín. 50+;
+  flat com 3+ quartos ou área mín. 90+; terreno se há filtro de
+  quartos/banheiros; cobertura se área máx. < 60).
+- **Mais páginas onde importa**: até 2 categorias = 3 páginas cada; 3-4
+  categorias = 2 páginas; 5+ = 1 página.
+- **Varredura em largura**: página 1 de todas as categorias, depois página
+  2 de todas, etc. — o limite de tempo nunca deixa uma categoria inteira de
+  fora.
+- **Navegador**: timeout 12s → 20s; 1 nova tentativa se a página 1 der
+  timeout; rastreadores/anúncios (Google Analytics, DoubleClick etc.) são
+  bloqueados para carregar mais rápido.
+- Não começa página nova se restarem menos de 25s do orçamento de 85s.
+
 ## Status atual (bugs de extração: quartos de 2 dígitos, áreas grandes e banheiros)
 
 Reynaldo testou com filtros (3 quartos, 2-3 banheiros, 90-120m²) e

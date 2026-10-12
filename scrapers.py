@@ -241,13 +241,16 @@ def _buscar_pagina_playwright(url: str) -> Tuple[Optional[str], str]:
                 pagina = contexto.new_page()
 
                 def _bloquear_recursos_pesados(rota):
-                    if rota.request.resource_type in ("image", "media", "font"):
+                    url_req = rota.request.url
+                    if rota.request.resource_type in ("image", "media", "font") or any(
+                        d in url_req for d in _DOMINIOS_RASTREAMENTO
+                    ):
                         rota.abort()
                     else:
                         rota.continue_()
 
                 pagina.route("**/*", _bloquear_recursos_pesados)
-                pagina.goto(url, wait_until="domcontentloaded", timeout=12000)
+                pagina.goto(url, wait_until="domcontentloaded", timeout=20000)
                 pagina.wait_for_timeout(1500)
                 html = pagina.content()
             finally:
@@ -481,7 +484,7 @@ def _aplica_filtros_basicos(
 # VivaReal — dados extraídos direto do slug da URL
 # ---------------------------------------------------------------------------
 
-def buscar_vivareal(cidade: str, uf: str, tipo: Optional[str] = None, max_paginas: int = 1) -> Tuple[List[Imovel], List[str]]:
+def buscar_vivareal(cidade: str, uf: str, tipo: Optional[str] = None, max_paginas: int = 1, filtros: Optional[dict] = None) -> Tuple[List[Imovel], List[str]]:
     slug_cidade = _slug_cidade(cidade)
     slug_uf = uf.lower()
     imoveis: List[Imovel] = []
@@ -606,32 +609,71 @@ TIPOS_AMPLOS_PADRAO_CHAVESNAMAO = [
 PAGINA_MAXIMA_PERMITIDA_CHAVESNAMAO = 5
 
 
+def _categorias_relevantes_chavesnamao(filtros: Optional[dict]) -> List[str]:
+    """Escolhe, entre as categorias padrão, só as que fazem sentido para os
+    filtros do usuário. Com "3 quartos, 90-120m²", buscar kitnet, flat, loft
+    ou terreno só gasta o (limitado) tempo da busca em categorias onde
+    quase nunca há correspondência — foi o que deixou o apartamento (a
+    categoria mais provável) sem tempo de rodar num teste real."""
+    f = filtros or {}
+    q_min, q_max = f.get("quartos_min"), f.get("quartos_max")
+    b_min, b_max = f.get("banheiros_min"), f.get("banheiros_max")
+    a_min, a_max = f.get("area_min"), f.get("area_max")
+
+    relevantes = []
+    for slug in TIPOS_AMPLOS_PADRAO_CHAVESNAMAO:
+        # Terreno não tem quartos/banheiros
+        if slug == "terrenos-a-venda" and (q_min or q_max or b_min or b_max):
+            continue
+        # Kitnet/loft: imóveis de 1 quarto e área pequena
+        if slug in ("kitnet-a-venda", "loft-a-venda") and (
+            (q_min and q_min >= 2) or (a_min and a_min >= 50)
+        ):
+            continue
+        # Flat: tipicamente 1-2 quartos, área pequena/média
+        if slug == "flat-a-venda" and (
+            (q_min and q_min >= 3) or (a_min and a_min >= 90)
+        ):
+            continue
+        # Cobertura: raramente pequena
+        if slug == "coberturas-a-venda" and a_max and a_max < 60:
+            continue
+        relevantes.append(slug)
+
+    return relevantes or list(TIPOS_AMPLOS_PADRAO_CHAVESNAMAO)
+
+
+# Domínios de rastreamento/publicidade bloqueados no navegador automatizado
+# para acelerar o carregamento (não são necessários para ver os anúncios).
+_DOMINIOS_RASTREAMENTO = (
+    "googletagmanager", "google-analytics", "doubleclick", "googlesyndication",
+    "facebook.net", "facebook.com/tr", "hotjar", "clarity.ms", "criteo",
+    "taboola", "adsystem", "adnxs",
+)
+
+
 def buscar_chavesnamao(
     cidade: str,
     uf: str,
     tipo: Optional[str] = None,
     max_paginas: Optional[int] = None,
+    filtros: Optional[dict] = None,
 ) -> Tuple[List[Imovel], List[str]]:
     """
     Busca imóveis no Chaves na Mão.
 
-    Paginação: o robots.txt do site tem estas regras:
-        Allow: /*?pg=2$
-        Allow: /*?pg=3$
-        Allow: /*?pg=4$
-        Allow: /*?pg=5$
-        Disallow: /*?*
-    Ou seja, ele permite EXPLICITAMENTE as páginas 2 a 5 (via ?pg=N) e só
-    bloqueia parâmetros de URL fora dessa lista. Por isso paginamos até a
-    página 5 — nunca além disso, já que páginas 6+ cairiam no Disallow
-    genérico.
+    Paginação: o robots.txt do site permite explicitamente as páginas 2 a 5
+    (Allow: /*?pg=2$ ... /*?pg=5$) e bloqueia os demais parâmetros de URL
+    (Disallow: /*?*). Por isso nunca passamos da página 5.
 
-    max_paginas controla quantas páginas por categoria são buscadas (1 a
-    5). Se não for informado: usa 5 quando um tipo específico foi pedido
-    (1 categoria só, então cabe no tempo disponível), ou 2 quando nenhum
-    tipo foi especificado (várias categorias combinadas — ver
-    TIPOS_AMPLOS_PADRAO_CHAVESNAMAO — para não estourar o tempo de resposta
-    do Render buscando 5 páginas de 4 categorias ao mesmo tempo).
+    Com um tipo específico: 1 categoria, até 5 páginas por padrão.
+    Sem tipo ("Qualquer tipo"): escolhe as categorias relevantes para os
+    `filtros` (ver _categorias_relevantes_chavesnamao) e usa mais páginas
+    quanto menos categorias sobrarem (1 a 3 páginas).
+
+    A varredura é "em largura": primeiro a página 1 de todas as categorias,
+    depois a página 2 de todas, e assim por diante — assim, se o limite de
+    tempo cortar a busca, nenhuma categoria fica totalmente de fora.
     """
     slug_cidade = _slug_cidade(cidade)
     slug_uf = uf.lower()
@@ -647,39 +689,39 @@ def buscar_chavesnamao(
 
     if tipo and tipo in TIPO_PARA_SLUG_CHAVESNAMAO:
         slugs_categoria = [TIPO_PARA_SLUG_CHAVESNAMAO[tipo]]
-        # Com o navegador Playwright reaproveitado entre páginas (não abre
-        # mais um novo a cada vez), 5 páginas — o máximo permitido pelo
-        # robots.txt — já cabe com folga no tempo que o Render permite.
         paginas_por_categoria = max_paginas or PAGINA_MAXIMA_PERMITIDA_CHAVESNAMAO
     else:
-        slugs_categoria = TIPOS_AMPLOS_PADRAO_CHAVESNAMAO
-        # Voltado para 1 página por categoria: a lista de categorias
-        # cresceu de 4 para 8 (para cobrir imóveis compactos como kitnet/
-        # flat/loft, que estavam faltando) — com 8 categorias, manter 2
-        # páginas cada arriscaria estourar o tempo do Render de novo.
-        # Priorizamos amplitude (mais categorias) sobre profundidade (mais
-        # páginas por categoria) neste modo "Qualquer tipo".
-        paginas_por_categoria = max_paginas or 1
+        slugs_categoria = _categorias_relevantes_chavesnamao(filtros)
+        if max_paginas:
+            paginas_por_categoria = max_paginas
+        elif len(slugs_categoria) <= 2:
+            paginas_por_categoria = 3
+        elif len(slugs_categoria) <= 4:
+            paginas_por_categoria = 2
+        else:
+            paginas_por_categoria = 1
 
     paginas_por_categoria = max(1, min(paginas_por_categoria, PAGINA_MAXIMA_PERMITIDA_CHAVESNAMAO))
 
-    # Limite de tempo total de segurança: mesmo com o navegador
-    # reaproveitado, uma busca com muitas páginas/categorias ainda pode
-    # demorar demais. Paramos de buscar páginas NOVAS assim que esse
-    # orçamo de tempo é ultrapassado (o que já foi buscado até então é
-    # aproveitado normalmente). Aumentado de 70 para 85s — ainda com boa
-    # margem antes do limite de ~100s do Render — para acomodar a amostra
-    # maior (mais páginas por padrão) sem voltar a arriscar erro 502.
+    # Orçamento de tempo total (o Render derruba requisições perto de
+    # 100s). Não começamos uma página nova se faltar menos que a margem
+    # abaixo, porque uma página lenta pode levar ~30s sozinha.
     tempo_inicio = time.time()
     ORCAMENTO_TEMPO_SEGUNDOS = 85
+    MARGEM_NOVA_PAGINA_SEGUNDOS = 25
 
     links_vistos = set()
+    ativas = list(slugs_categoria)
 
-    for slug_categoria in slugs_categoria:
-        url_base = f"https://www.chavesnamao.com.br/{slug_categoria}/{slug_uf}-{slug_cidade}/"
+    for pagina in range(1, paginas_por_categoria + 1):
+        if not ativas:
+            break
+        proximas = []
 
-        for pagina in range(1, paginas_por_categoria + 1):
-            if time.time() - tempo_inicio > ORCAMENTO_TEMPO_SEGUNDOS:
+        for slug_categoria in ativas:
+            url_base = f"https://www.chavesnamao.com.br/{slug_categoria}/{slug_uf}-{slug_cidade}/"
+
+            if time.time() - tempo_inicio > ORCAMENTO_TEMPO_SEGUNDOS - MARGEM_NOVA_PAGINA_SEGUNDOS:
                 diagnosticos.append(
                     f"{url_base} -> busca interrompida por limite de tempo "
                     f"de segurança ({ORCAMENTO_TEMPO_SEGUNDOS}s) — resultados "
@@ -690,9 +732,19 @@ def buscar_chavesnamao(
             url = url_base if pagina == 1 else f"{url_base}?pg={pagina}"
             html, diag = _buscar_pagina(url, marcador_de_conteudo="/imovel/")
 
+            # Uma nova tentativa só para falha de tempo esgotado na 1ª
+            # página (a primeira carga costuma ser a mais lenta) e só se
+            # ainda houver tempo de sobra.
+            if (
+                not html and pagina == 1 and "Timeout" in diag
+                and time.time() - tempo_inicio < 35
+            ):
+                html, diag2 = _buscar_pagina(url, marcador_de_conteudo="/imovel/")
+                diag = f"{diag} || 2ª tentativa: {diag2}"
+
             if not html:
                 diagnosticos.append(diag)
-                break  # não adianta tentar a próxima página desta categoria
+                continue  # categoria encerrada (não entra em `proximas`)
 
             links_brutos = set(link_padrao.findall(html))
             metodo = "padrão href=\"...\""
@@ -721,11 +773,6 @@ def buscar_chavesnamao(
                 preco_match = re.search(r"RS(\d+)", link)
                 preco = float(preco_match.group(1)) if preco_match else None
 
-                # Corrigido: limites de dígitos ampliados. Antes,
-                # "-(\d{2,5})m2-" não capturava áreas muito grandes (ex:
-                # terrenos/chácaras de 115.600m²) e "(\d)-quartos?-"
-                # capturava só 1 dígito, cortando por engano "23-quartos"
-                # para "3" em vez de extrair o valor certo ou descartar.
                 area_match = re.search(r"-(\d{1,7})m2-", link)
                 area = float(area_match.group(1)) if area_match else None
 
@@ -733,10 +780,7 @@ def buscar_chavesnamao(
                 quartos = int(quartos_match.group(1)) if quartos_match else None
 
                 # O Chaves na Mão NÃO inclui o número de banheiros no link
-                # nem no título do anúncio na tela de busca (só aparece ao
-                # abrir o anúncio individual) — por isso banheiros fica
-                # sempre None aqui. Isso é uma limitação do próprio site,
-                # não um bug de extração.
+                # nem no título na tela de busca — banheiros fica sempre None.
                 titulo = slug.replace("-", " ").title()
                 incompleto = preco is None or area is None or quartos is None
 
@@ -758,12 +802,12 @@ def buscar_chavesnamao(
                 diag += " — 0 links encontrados. " + _diagnosticar_ausencia_de_links(html, "/imovel/")
             diagnosticos.append(diag)
 
-            # Parada antecipada: se esta página não trouxe nenhum link
-            # novo, provavelmente chegamos ao fim dos resultados dessa
-            # categoria (ou fomos bloqueados) — não faz sentido continuar
-            # gastando tempo com as próximas páginas dela.
-            if links_novos_nesta_pagina == 0:
-                break
+            # Só continua paginando esta categoria se esta página trouxe
+            # algo novo (senão acabaram os resultados ou fomos bloqueados).
+            if links_novos_nesta_pagina > 0:
+                proximas.append(slug_categoria)
+
+        ativas = proximas
 
     return imoveis, diagnosticos
 
@@ -772,7 +816,7 @@ def buscar_chavesnamao(
 # ZAP Imóveis — janela de texto ao redor do link no HTML bruto
 # ---------------------------------------------------------------------------
 
-def buscar_zap(cidade: str, uf: str, tipo: Optional[str] = None, max_paginas: int = 1) -> Tuple[List[Imovel], List[str]]:
+def buscar_zap(cidade: str, uf: str, tipo: Optional[str] = None, max_paginas: int = 1, filtros: Optional[dict] = None) -> Tuple[List[Imovel], List[str]]:
     slug_cidade = _slug_cidade(cidade)
     slug_uf = uf.lower()
     imoveis: List[Imovel] = []
@@ -840,7 +884,7 @@ def buscar_zap(cidade: str, uf: str, tipo: Optional[str] = None, max_paginas: in
 # Imovelweb — janela de texto ao redor do link no HTML bruto
 # ---------------------------------------------------------------------------
 
-def buscar_imovelweb(cidade: str, uf: str, tipo: Optional[str] = None, max_paginas: int = 1) -> Tuple[List[Imovel], List[str]]:
+def buscar_imovelweb(cidade: str, uf: str, tipo: Optional[str] = None, max_paginas: int = 1, filtros: Optional[dict] = None) -> Tuple[List[Imovel], List[str]]:
     slug_cidade = _slug_cidade(cidade)
     slug_uf = uf.lower()
     imoveis: List[Imovel] = []
@@ -973,7 +1017,12 @@ def buscar_todos_portais(
             continue
 
         try:
-            imoveis, diagnosticos = funcao(cidade, uf, tipo=tipo)
+            filtros = {
+                "quartos_min": quartos_min, "quartos_max": quartos_max,
+                "banheiros_min": banheiros_min, "banheiros_max": banheiros_max,
+                "area_min": area_min, "area_max": area_max,
+            }
+            imoveis, diagnosticos = funcao(cidade, uf, tipo=tipo, filtros=filtros)
             # Chaves na Mão já busca na URL certa do tipo pedido (ou combina
             # vários tipos comuns quando nenhum foi especificado) — filtrar
             # de novo pelo texto do título aqui seria redundante e poderia

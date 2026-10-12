@@ -379,6 +379,99 @@ class TestBuscarPaginaComCamadas(unittest.TestCase):
         self.assertIsInstance(diag, str)
 
 
+class TestCategoriasRelevantes(unittest.TestCase):
+    def test_tres_quartos_e_area_grande_descarta_compactos_e_terreno(self):
+        cats = scrapers._categorias_relevantes_chavesnamao(
+            {"quartos_min": 3, "quartos_max": 3, "area_min": 90, "area_max": 120}
+        )
+        for descartada in ("kitnet-a-venda", "loft-a-venda", "flat-a-venda", "terrenos-a-venda"):
+            self.assertNotIn(descartada, cats)
+        for mantida in ("apartamentos-a-venda", "casas-a-venda", "casas-em-condominio-a-venda"):
+            self.assertIn(mantida, cats)
+
+    def test_um_quarto_area_pequena_mantem_compactos(self):
+        cats = scrapers._categorias_relevantes_chavesnamao(
+            {"quartos_min": 1, "quartos_max": 1, "area_min": 35, "area_max": 45}
+        )
+        for mantida in ("apartamentos-a-venda", "kitnet-a-venda", "flat-a-venda", "loft-a-venda"):
+            self.assertIn(mantida, cats)
+        self.assertNotIn("terrenos-a-venda", cats)
+        self.assertNotIn("coberturas-a-venda", cats)  # área máx < 60
+
+    def test_sem_filtros_mantem_todas(self):
+        self.assertEqual(
+            scrapers._categorias_relevantes_chavesnamao(None),
+            scrapers.TIPOS_AMPLOS_PADRAO_CHAVESNAMAO,
+        )
+
+
+class TestVarreduraEmLargura(unittest.TestCase):
+    @patch("scrapers._buscar_pagina")
+    def test_pagina_1_de_todas_as_categorias_antes_da_pagina_2(self, mock_buscar):
+        contador = {"n": 0}
+
+        def _fake(url, marcador_de_conteudo=None):
+            contador["n"] += 1
+            html = (
+                f'<html><a href="/imovel/casa-a-venda-3-quartos-sp-mogi-das-cruzes-'
+                f'100m2-RS{500000 + contador["n"]}/id-{7000 + contador["n"]}/">x</a></html>'
+            )
+            return html, "OK"
+
+        mock_buscar.side_effect = _fake
+        filtros = {"quartos_min": 3, "quartos_max": 3, "area_min": 90, "area_max": 120}
+        scrapers.buscar_chavesnamao("Mogi das Cruzes", "SP", filtros=filtros)
+
+        urls = [c[0][0] for c in mock_buscar.call_args_list]
+        # 4 categorias relevantes -> 2 páginas cada = 8 chamadas
+        self.assertEqual(len(urls), 8)
+        # as 4 primeiras são página 1 (sem ?pg=), as 4 últimas página 2
+        self.assertTrue(all("?pg=" not in u for u in urls[:4]))
+        self.assertTrue(all("?pg=2" in u for u in urls[4:]))
+
+    @patch("scrapers._buscar_pagina")
+    def test_categoria_que_falha_nao_derruba_as_outras(self, mock_buscar):
+        def _fake(url, marcador_de_conteudo=None):
+            if "apartamentos" in url:
+                return None, "Playwright falhou: Timeout 20000ms exceeded"
+            return (
+                '<html><a href="/imovel/casa-a-venda-3-quartos-sp-mogi-das-cruzes-'
+                '100m2-RS500000/id-1/">x</a></html>',
+                "OK",
+            )
+
+        mock_buscar.side_effect = _fake
+        resultado, diags = scrapers.buscar_chavesnamao(
+            "Mogi das Cruzes", "SP", max_paginas=1,
+            filtros={"quartos_min": 3, "area_min": 90},
+        )
+        self.assertEqual(len(resultado), 1)
+        self.assertTrue(any("Timeout" in d for d in diags))
+
+    @patch("scrapers._buscar_pagina")
+    def test_timeout_na_pagina_1_tenta_de_novo_uma_vez(self, mock_buscar):
+        respostas = [
+            (None, "Playwright falhou: Timeout 20000ms exceeded"),
+            (
+                '<html><a href="/imovel/apartamento-a-venda-3-quartos-sp-mogi-das-cruzes-'
+                '100m2-RS500000/id-1/">x</a></html>',
+                "OK",
+            ),
+        ]
+        mock_buscar.side_effect = lambda url, marcador_de_conteudo=None: respostas.pop(0)
+        resultado, _ = scrapers.buscar_chavesnamao(
+            "Mogi das Cruzes", "SP", tipo="Apartamento", max_paginas=1
+        )
+        self.assertEqual(mock_buscar.call_count, 2)
+        self.assertEqual(len(resultado), 1)
+
+    @patch("scrapers._buscar_pagina")
+    def test_falha_sem_timeout_nao_tenta_de_novo(self, mock_buscar):
+        mock_buscar.return_value = (None, "HTTP 403 (bloqueio)")
+        scrapers.buscar_chavesnamao("Mogi das Cruzes", "SP", tipo="Apartamento", max_paginas=1)
+        self.assertEqual(mock_buscar.call_count, 1)
+
+
 class TestOrcamentoDeTempo(unittest.TestCase):
     @patch("scrapers._buscar_pagina")
     def test_para_de_paginar_apos_estourar_orcamento_de_tempo(self, mock_buscar):
