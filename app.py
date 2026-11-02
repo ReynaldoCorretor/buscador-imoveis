@@ -25,6 +25,7 @@ from flask import (Flask, abort, jsonify, redirect, render_template,
 import jobs
 import regiao
 import storage
+from rotas_busca import bp as bp_busca
 from rotas_pedidos import bp as bp_pedidos, token_coletor_ok
 from scrapers import (buscar_todos_portais, diagnosticar_portais, _slug_cidade,
                       TIPO_PARA_SLUG_CHAVESNAMAO)
@@ -33,6 +34,7 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024   # /api/importar: no máximo 5 MB por envio
 MAX_ANUNCIOS_POR_ENVIO = 1000
 app.register_blueprint(bp_pedidos)
+app.register_blueprint(bp_busca)   # página inicial "/" (caminho 2), com senha
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -231,8 +233,9 @@ def _executar_diagnostico():
     return diagnosticar_portais()
 
 
-@app.route("/", methods=["GET"])
+@app.route("/antigo", methods=["GET"])
 def index():
+    """Formulário antigo (só Chaves na Mão, sem senha). A página principal agora é "/" (rotas_busca)."""
     return render_template("index.html", estados=ESTADOS_BR, tipos=TIPOS_IMOVEL, erro=None)
 
 

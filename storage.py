@@ -235,6 +235,17 @@ class SQLiteBackend:
         with self._lock:
             return [dict(r) for r in self._con.execute(sql, args + [limite])]
 
+    def imoveis_da_cidade(self, cidade_busca: str, desde_iso: Optional[str] = None,
+                          limite: int = 20000) -> List[dict]:
+        """Todos os imóveis guardados de uma cidade (coletados pela varredura ou por pedidos),
+        vistos desde `desde_iso` (ISO-8601). Base da busca instantânea do caminho 2."""
+        sql, args = "SELECT * FROM imoveis WHERE cidade_busca = ?", [cidade_busca]
+        if desde_iso:
+            sql += " AND ultima_vista >= ?"
+            args.append(desde_iso)
+        with self._lock:
+            return [dict(r) for r in self._con.execute(sql + " LIMIT ?", args + [limite])]
+
     def criar_pedido(self, filtros: dict) -> int:
         with self._lock, self._con:
             cur = self._con.execute(
@@ -369,6 +380,22 @@ class SupabaseBackend:
         if dentro_do_filtro:
             p["dentro_do_filtro"] = f"eq.{dentro_do_filtro}"
         return self._req("GET", "imoveis", params=p) or []
+
+    def imoveis_da_cidade(self, cidade_busca: str, desde_iso: Optional[str] = None,
+                          limite: int = 20000) -> List[dict]:
+        """Igual ao SQLite. O Supabase devolve no máximo 1000 linhas por consulta (configuração
+        padrão "Max rows"), então busca em páginas de 1000 até acabar."""
+        saida, pagina = [], 1000
+        while len(saida) < limite:
+            p = {"select": "*", "cidade_busca": f"eq.{cidade_busca}", "order": "link.asc",
+                 "limit": str(pagina), "offset": str(len(saida))}
+            if desde_iso:
+                p["ultima_vista"] = f"gte.{desde_iso}"
+            lote = self._req("GET", "imoveis", params=p) or []
+            if not lote:      # só para com página VAZIA: o limite do projeto pode ser menor que 1000
+                break
+            saida.extend(lote)
+        return saida[:limite]
 
     def criar_pedido(self, filtros: dict) -> int:
         r = self._req("POST", "pedidos", json_body={"filtros": filtros},

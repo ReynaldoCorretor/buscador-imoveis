@@ -55,6 +55,11 @@ def token_coletor_ok() -> bool:
 def _proteger_paginas():
     if request.path.startswith("/api/"):
         return None   # a API usa o token do coletor (conferido em cada rota)
+    return exigir_senha()
+
+
+def exigir_senha():
+    """None se a senha do site (SITE_SENHA) veio certa; senão a resposta 401/404 a devolver."""
     senha = os.environ.get("SITE_SENHA", "")
     if not senha:
         abort(404)
@@ -62,7 +67,7 @@ def _proteger_paginas():
     if not auth or auth.type != "basic" or not hmac.compare_digest(
             (auth.password or "").encode(), senha.encode()):
         return Response("Senha necessária.", 401,
-                        {"WWW-Authenticate": 'Basic realm="Buscador - pedidos", charset="UTF-8"'})
+                        {"WWW-Authenticate": 'Basic realm="Buscador de imoveis", charset="UTF-8"'})
     return None
 
 
