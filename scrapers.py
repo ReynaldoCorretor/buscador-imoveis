@@ -83,6 +83,10 @@ class Imovel:
     quartos: Optional[int] = None
     banheiros: Optional[int] = None
     dados_incompletos: bool = False
+    # True quando o usuário filtrou por banheiros mas o portal não informa
+    # esse dado na tela de busca: o imóvel é mantido e o usuário confere
+    # no anúncio original.
+    banheiros_nao_verificados: bool = False
 
     def to_dict(self):
         return {
@@ -94,6 +98,7 @@ class Imovel:
             "quartos": self.quartos,
             "banheiros": self.banheiros,
             "dados_incompletos": self.dados_incompletos,
+            "banheiros_nao_verificados": self.banheiros_nao_verificados,
         }
 
 
@@ -328,6 +333,58 @@ def _garantir_navegador_playwright_instalado() -> str:
 
 
 
+def _texto_visivel_aproximado(html: str) -> str:
+    """Remove <script>/<style> e tags para olhar só o texto que um usuário
+    veria. Palavras como "cloudflare" e "captcha" aparecem em scripts de
+    páginas normais e davam falso positivo quando se olhava o HTML bruto."""
+    sem_scripts = re.sub(r"(?is)<(script|style|noscript)\b.*?</\1>", " ", html)
+    sem_tags = re.sub(r"(?s)<[^>]+>", " ", sem_scripts)
+    return re.sub(r"\s+", " ", sem_tags).strip()
+
+
+def _titulo_da_pagina(html: str) -> str:
+    m = re.search(r"(?is)<title[^>]*>(.*?)</title>", html)
+    return re.sub(r"\s+", " ", m.group(1)).strip() if m else ""
+
+
+def classificar_falha(html: Optional[str], status: Optional[int] = None,
+                      marcador: Optional[str] = None) -> str:
+    """Diz POR QUE uma página não trouxe anúncios, em linguagem simples.
+
+    Códigos: CLOUDFLARE, CAPTCHA, LOGIN, BLOQUEIO_HTTP, SEM_RESPOSTA, VAZIA,
+    FORMATO_MUDOU. Só deve ser chamada quando a página NÃO tem o marcador de
+    conteúdo esperado. "FORMATO_MUDOU" = página parece normal, mas sem os
+    links esperados (o portal pode ter mudado o HTML)."""
+    if not html:
+        if status in (403, 429):
+            return f"BLOQUEIO_HTTP (HTTP {status})"
+        return "SEM_RESPOSTA (nada foi recebido)"
+
+    titulo = _titulo_da_pagina(html).lower()
+    texto = _texto_visivel_aproximado(html).lower()
+    visivel = f"{titulo} {texto[:3000]}"
+
+    if any(x in titulo for x in ("attention required", "just a moment", "um momento")) \
+            or ("cloudflare" in visivel and (status in (403, 429, 503) or len(texto) < 1500)):
+        return "CLOUDFLARE (desafio/bloqueio antirrobô)"
+    if any(x in visivel for x in (
+        "captcha", "não sou um robô", "nao sou um robo", "are you human",
+        "verify you are human", "verifique que você não é um robô",
+        "unusual traffic", "tráfego incomum", "pardon our interruption",
+    )):
+        return "CAPTCHA (o portal pediu verificação humana)"
+    if status in (403, 429):
+        return f"BLOQUEIO_HTTP (HTTP {status})"
+    if any(x in visivel for x in (
+        "faça login", "faca login", "entre na sua conta", "entrar ou cadastrar",
+        "sign in to continue", "crie sua conta para continuar",
+    )) and len(texto) < 3000:
+        return "LOGIN (o portal pediu login/cadastro para continuar)"
+    if len(texto) < 300:
+        return f"VAZIA (página com só {len(texto)} caracteres de texto)"
+    return "FORMATO_MUDOU (página normal, mas sem os links esperados — o portal pode ter alterado o HTML)"
+
+
 def _buscar_pagina(url: str, marcador_de_conteudo: Optional[str] = None) -> Tuple[Optional[str], str]:
     """Busca uma página e devolve (html_ou_None, mensagem_de_diagnostico).
 
@@ -357,14 +414,14 @@ def _buscar_pagina(url: str, marcador_de_conteudo: Optional[str] = None) -> Tupl
         html_pw, msg_pw = _buscar_pagina_playwright(url)
         if html_pw and _tem_marcador(html_pw):
             return html_pw, f"{msg_falha}; {msg_pw}"
-        return None, f"{msg_falha}; tentativa com Playwright também falhou ({msg_pw})"
+        return None, f"{msg_falha}; tentativa com Playwright também falhou ({msg_pw}) [CAUSA: SEM_RESPOSTA (timeout ou falha de conexão)]"
     except requests.RequestException as exc:
         msg_falha = f"{url} -> erro de conexão: {exc}"
         logger.warning(msg_falha)
         html_pw, msg_pw = _buscar_pagina_playwright(url)
         if html_pw and _tem_marcador(html_pw):
             return html_pw, f"{msg_falha}; {msg_pw}"
-        return None, f"{msg_falha}; tentativa com Playwright também falhou ({msg_pw})"
+        return None, f"{msg_falha}; tentativa com Playwright também falhou ({msg_pw}) [CAUSA: SEM_RESPOSTA (timeout ou falha de conexão)]"
 
     if resp.status_code == 200 and len(resp.text) >= 2000 and _tem_marcador(resp.text):
         msg = f"{url} -> HTTP 200 OK ({len(resp.text)} caracteres)"
@@ -403,7 +460,9 @@ def _buscar_pagina(url: str, marcador_de_conteudo: Optional[str] = None) -> Tupl
         logger.info(msg)
         return html_pw, msg
 
-    msg = f"{url} -> {motivo_inicial}; tentativa com Playwright também falhou ({msg_pw})"
+    # Falhou nas 3 camadas: descobre a causa olhando a melhor página que temos
+    causa = classificar_falha(html_pw or resp.text, status=resp.status_code, marcador=marcador_de_conteudo)
+    msg = f"{url} -> {motivo_inicial}; tentativa com Playwright também falhou ({msg_pw}) [CAUSA: {causa}]"
     logger.warning(msg)
     return None, msg
 
@@ -453,17 +512,14 @@ def _aplica_filtros_basicos(
             continue
         if quartos_max and im.quartos is not None and im.quartos > quartos_max:
             continue
-        # Banheiros é tratado de forma mais rígida que os outros campos:
-        # o Chaves na Mão não informa o número de banheiros na tela de
-        # busca (só no anúncio individual aberto), então essa informação
-        # é SEMPRE ausente para esse portal — não é uma falha pontual de
-        # extração como pode acontecer com quartos/área/preço. Por isso,
-        # quando o usuário define um filtro de banheiros, excluímos os
-        # imóveis sem essa informação em vez de deixar passar "por
-        # precaução" (como fazemos para os outros campos) — do contrário
-        # o filtro de banheiros nunca excluiria nada de verdade.
-        if (banheiros_min or banheiros_max) and im.banheiros is None:
-            continue
+        # Banheiros: o Chaves na Mão não publica esse dado na tela de busca
+        # (só no anúncio aberto). Excluir quem não tem o dado zerava todos
+        # os resultados do portal, então o imóvel é MANTIDO e marcado como
+        # "banheiros não verificados" para o usuário conferir no anúncio.
+        # Quando o dado existe (ex.: ZAP/Imovelweb), o filtro vale normalmente.
+        im.banheiros_nao_verificados = bool(
+            (banheiros_min or banheiros_max) and im.banheiros is None
+        )
         if banheiros_min and im.banheiros is not None and im.banheiros < banheiros_min:
             continue
         if banheiros_max and im.banheiros is not None and im.banheiros > banheiros_max:
@@ -799,7 +855,9 @@ def buscar_chavesnamao(
             if links_brutos:
                 diag += f" — {len(links_brutos)} links encontrados ({metodo}), {links_novos_nesta_pagina} novos"
             else:
-                diag += " — 0 links encontrados. " + _diagnosticar_ausencia_de_links(html, "/imovel/")
+                diag += (" — 0 links encontrados [CAUSA: FORMATO_MUDOU — a página veio, "
+                         "mas o padrão de link não bate]. "
+                         + _diagnosticar_ausencia_de_links(html, "/imovel/"))
             diagnosticos.append(diag)
 
             # Só continua paginando esta categoria se esta página trouxe
@@ -1053,3 +1111,44 @@ def buscar_todos_portais(
         "erros": erros,
         "total": len(todos),
     }
+
+
+# ---------------------------------------------------------------------------
+# Diagnóstico de acesso aos portais (item "IP do servidor")
+# ---------------------------------------------------------------------------
+
+PORTAIS_DIAGNOSTICO = {
+    "Chaves na Mão": ("https://www.chavesnamao.com.br/apartamentos-a-venda/sp-mogi-das-cruzes/", "/imovel/"),
+    "VivaReal": ("https://www.vivareal.com.br/venda/sp/mogi-das-cruzes/", "/imovel/"),
+    "ZAP Imóveis": ("https://www.zapimoveis.com.br/venda/imoveis/sp+mogi-das-cruzes/", "/imovel/"),
+    "Imovelweb": ("https://www.imovelweb.com.br/imoveis-venda-mogi-das-cruzes-sp.html", "/propriedades/"),
+}
+
+
+def diagnosticar_portais(portais: Optional[List[str]] = None) -> List[dict]:
+    """Abre SÓ A PÁGINA 1 de cada portal, a partir da máquina onde este código
+    roda (o IP importa: IP de datacenter costuma ser tratado diferente de IP
+    residencial), e diz se o conteúdo real chegou ou por que não chegou.
+
+    Não filtra nem pagina: é uma sonda leve, de 1 requisição por portal."""
+    resultados = []
+    for nome, (url, marcador) in PORTAIS_DIAGNOSTICO.items():
+        if portais and nome not in portais:
+            continue
+        inicio = time.time()
+        try:
+            html, msg = _buscar_pagina(url, marcador_de_conteudo=marcador)
+            ok = bool(html)
+            n_links = len(set(re.findall(r'href="[^"]*' + re.escape(marcador) + r'[^"]*"', html))) if html else 0
+            causa = ""
+            if not ok:
+                m = re.search(r"\[CAUSA: ([^\]]+)\]", msg)
+                causa = m.group(1) if m else "ver detalhe"
+            resultados.append({"portal": nome, "ok": ok, "links": n_links,
+                               "segundos": round(time.time() - inicio, 1),
+                               "causa": causa, "detalhe": msg})
+        except Exception as exc:  # um portal nunca derruba o diagnóstico
+            resultados.append({"portal": nome, "ok": False, "links": 0,
+                               "segundos": round(time.time() - inicio, 1),
+                               "causa": f"ERRO_INTERNO ({type(exc).__name__})", "detalhe": str(exc)})
+    return resultados

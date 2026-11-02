@@ -26,4 +26,4 @@ EXPOSE 10000
 
 # O Render injeta a porta de verdade na variável de ambiente $PORT — por
 # isso usamos a forma "shell" do CMD, que permite essa substituição.
-CMD ["/bin/sh", "-c", "gunicorn app:app --timeout 120 --workers 1 --bind 0.0.0.0:${PORT:-10000}"]
+CMD ["/bin/sh", "-c", "gunicorn app:app --timeout 120 --workers 1 --threads 4 --bind 0.0.0.0:${PORT:-10000}"]
