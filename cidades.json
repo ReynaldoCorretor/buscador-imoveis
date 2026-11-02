@@ -1,0 +1,74 @@
+[
+  {
+    "slug": "suzano",
+    "nome": "Suzano",
+    "uf": "sp",
+    "vivareal": "suzano",
+    "zap": "suzano",
+    "onde": "%2CS%C3%A3o+Paulo%2CSuzano%2C%2C%2C%2C%2Ccity%2CBR%3ESao+Paulo%3ENULL%3ESuzano%2C-23.537527%2C-46.309244%2C"
+  },
+  {
+    "slug": "itaquaquecetuba",
+    "nome": "Itaquaquecetuba",
+    "uf": "sp",
+    "vivareal": "itaquaquecetuba",
+    "zap": "itaquaquecetuba",
+    "onde": "%2CS%C3%A3o+Paulo%2CItaquaquecetuba%2C%2C%2C%2C%2Ccity%2CBR%3ESao+Paulo%3ENULL%3EItaquaquecetuba%2C-23.49621%2C-46.356529%2C"
+  },
+  {
+    "slug": "ferraz-de-vasconcelos",
+    "nome": "Ferraz de Vasconcelos",
+    "uf": "sp",
+    "vivareal": "ferraz-de-vasconcelos",
+    "zap": "ferraz-de-vasconcelos",
+    "onde": "%2CS%C3%A3o+Paulo%2CFerraz+de+Vasconcelos%2C%2C%2C%2C%2Ccity%2CBR%3ESao+Paulo%3ENULL%3EFerraz+de+Vasconcelos%2C-23.541396%2C-46.367921%2C"
+  },
+  {
+    "slug": "poa",
+    "nome": "Poá",
+    "uf": "sp",
+    "vivareal": "poa",
+    "zap": "poa",
+    "onde": "%2CS%C3%A3o+Paulo%2CPo%C3%A1%2C%2C%2C%2C%2Ccity%2CBR%3ESao+Paulo%3ENULL%3EPoa%2C-23.519947%2C-46.344122%2C"
+  },
+  {
+    "slug": "aruja",
+    "nome": "Arujá",
+    "uf": "sp",
+    "vivareal": "aruja",
+    "zap": "aruja",
+    "onde": "%2CS%C3%A3o+Paulo%2CAruj%C3%A1%2C%2C%2C%2C%2Ccity%2CBR%3ESao+Paulo%3ENULL%3EAruja%2C-23.395137%2C-46.322711%2C"
+  },
+  {
+    "slug": "guararema",
+    "nome": "Guararema",
+    "uf": "sp",
+    "vivareal": "guararema",
+    "zap": "guararema",
+    "onde": "%2CS%C3%A3o+Paulo%2CGuararema%2C%2C%2C%2C%2Ccity%2CBR%3ESao+Paulo%3ENULL%3EGuararema%2C-23.412872%2C-46.035023%2C"
+  },
+  {
+    "slug": "biritiba-mirim",
+    "nome": "Biritiba Mirim",
+    "uf": "sp",
+    "vivareal": "biritiba-mirim",
+    "zap": "biritiba-mirim",
+    "onde": "%2CS%C3%A3o+Paulo%2CBiritiba+Mirim%2C%2C%2C%2C%2Ccity%2CBR%3ESao+Paulo%3ENULL%3EBiritiba+Mirim%2C-23.57045%2C-46.04096%2C"
+  },
+  {
+    "slug": "santa-isabel",
+    "nome": "Santa Isabel",
+    "uf": "sp",
+    "vivareal": "santa-isabel",
+    "zap": "santa-isabel",
+    "onde": "%2CS%C3%A3o+Paulo%2CSanta+Isabel%2C%2C%2C%2C%2Ccity%2CBR%3ESao+Paulo%3ENULL%3ESanta+Isabel%2C-23.316615%2C-46.226141%2C"
+  },
+  {
+    "slug": "bertioga",
+    "nome": "Bertioga",
+    "uf": "sp",
+    "vivareal": "bertioga",
+    "zap": "bertioga",
+    "onde": "%2CS%C3%A3o+Paulo%2CBertioga%2C%2C%2C%2C%2Ccity%2CBR%3ESao+Paulo%3ENULL%3EBertioga%2C-23.799487%2C-46.022965%2C"
+  }
+]
