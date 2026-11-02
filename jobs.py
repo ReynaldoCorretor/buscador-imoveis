@@ -125,11 +125,12 @@ class Gerenciador:
             if job is None:
                 return None
             # tempo excedido: a tela deixa de esperar para sempre
+            limite = job["meta"].get("limite_s", LIMITE_EXECUCAO_S)   # tarefas longas (coleta) definem o seu
             if job["estado"] == EXECUTANDO and job["iniciado"] \
-                    and time.time() - job["iniciado"] > LIMITE_EXECUCAO_S:
+                    and time.time() - job["iniciado"] > limite:
                 job["estado"] = ERRO
                 job["erro"] = (
-                    f"A busca passou de {LIMITE_EXECUCAO_S}s e foi abandonada. "
+                    f"A busca passou de {limite}s e foi abandonada. "
                     "Tente de novo com filtros mais específicos (ex.: escolha o tipo do imóvel)."
                 )
             posicao = 0

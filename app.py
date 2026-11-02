@@ -169,6 +169,45 @@ PAGINA_DIAG = """
 """
 
 
+PAGINA_DIAG_COLETOR = """
+<!DOCTYPE html>
+<html lang="pt-br"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Teste do coletor no servidor</title>
+<style>
+ body { font-family:'Segoe UI',Arial,sans-serif; background:#f5f6f8; padding:24px 16px; }
+ .box { max-width:820px; margin:0 auto; background:#fff; border-radius:10px; padding:22px; box-shadow:0 4px 18px rgba(0,0,0,.08); }
+ .ok { color:#1b7a3d; font-weight:600 } .falha { color:#b23c17; font-weight:600 }
+ table { border-collapse:collapse; width:100%; font-size:.9rem } td,th { text-align:left; padding:6px; border-bottom:1px solid #e5e8ee }
+ pre { background:#f5f6f8; padding:10px; border-radius:6px; white-space:pre-wrap; word-break:break-word; font-size:.75rem }
+</style></head><body><div class="box">
+<h1>Teste do coletor novo, rodando NO SERVIDOR</h1>
+<p>Cidade: <strong>{{ r.cidade or p.cidade }}</strong> · páginas por portal: {{ p.paginas }} · modo leve: {{ 'sim' if p.leve else 'não' }}
+{% if r.segundos %} · tempo: {{ r.segundos }} s{% endif %}</p>
+{% if not r.ok %}<p class="falha">❌ {{ r.erro }}</p>{% endif %}
+{% if r.portais %}
+<table><tr><th>Portal</th><th>Estado</th><th>Páginas</th><th>Anúncios</th><th>Motivo</th></tr>
+{% for nome, i in r.portais.items() %}
+<tr><td>{{ nome }}</td><td class="{{ 'ok' if i.estado == 'ok' else 'falha' }}">{{ i.estado }}</td><td>{{ i.paginas_lidas }}</td>
+<td>{{ contagem.get(nome, 0) }}</td><td>{{ i.motivo }}</td></tr>{% endfor %}
+</table>{% endif %}
+{% if r.memoria %}<p><strong>Memória:</strong> pico da coleta {{ r.memoria.pico_coleta_mb or '?' }} MB ·
+pico do servidor inteiro {{ r.memoria.pico_container_mb or '?' }} MB · limite {{ r.memoria.limite_container_mb or '?' }} MB</p>{% endif %}
+{% if r.anuncios %}<p><strong>Exemplos lidos:</strong></p><table>
+{% for a in r.anuncios[:6] %}<tr><td>{{ a.portal }}</td><td>R$ {{ a.preco }}</td><td>{{ a.quartos }} q</td><td>{{ a.area_m2 }} m²</td>
+<td>{{ a.bairro }}</td><td>{{ a.dentro_do_filtro }}</td></tr>{% endfor %}</table>{% endif %}
+{% if r.descartados %}<p>Descartados (aluguel/outra cidade): {{ r.descartados }}</p>{% endif %}
+{% if r.log %}<details><summary>Registro técnico (últimas linhas)</summary><pre>{{ r.log | join('\n') }}</pre></details>{% endif %}
+</div></body></html>
+"""
+
+
+def _executar_diag_coletor(**params):
+    import coletor_servidor
+    r = coletor_servidor.rodar(params, timeout_s=params.pop("timeout_s", 540))
+    r.pop("anuncios_completos", None)
+    return {"params": params, "r": r}
+
+
 def validar_entrada(cidade: str, uf: str):
     """Devolve uma mensagem de erro em português, ou None se estiver tudo certo."""
     if not cidade:
@@ -265,6 +304,12 @@ def ver_busca(job_id):
         try:
             if meta.get("tipo_job") == "diagnostico":
                 return render_template_string(PAGINA_DIAG, resultados=resultado)
+            if meta.get("tipo_job") == "diag_coletor":
+                r = resultado["r"]
+                contagem = {}
+                for a in r.get("anuncios") or []:
+                    contagem[a.get("portal")] = contagem.get(a.get("portal"), 0) + 1
+                return render_template_string(PAGINA_DIAG_COLETOR, r=r, p=resultado["params"], contagem=contagem)
             return render_template(
                 "resultados.html",
                 cidade=meta.get("cidade", ""), uf=meta.get("uf", ""),
@@ -276,7 +321,9 @@ def ver_busca(job_id):
             logger.error("Erro ao montar resultados: %s\n%s", exc, traceback.format_exc())
             return render_template_string(PAGINA_ERRO, erro=f"{type(exc).__name__}: {exc}"), 500
 
-    titulo = "Rodando diagnóstico dos portais…" if job["meta"].get("tipo_job") == "diagnostico" else "Buscando imóveis…"
+    titulo = {"diagnostico": "Rodando diagnóstico dos portais…",
+              "diag_coletor": "Testando o coletor no servidor (pode levar até 9 minutos)…"}.get(
+        job["meta"].get("tipo_job"), "Buscando imóveis…")
     return render_template_string(
         PAGINA_AGUARDE, titulo=titulo, url_estado=url_for("estado_busca", job_id=job_id)
     )
@@ -356,6 +403,32 @@ def diagnostico_portais():
         abort(404)
     try:
         job_id = jobs.gerenciador.enviar(_executar_diagnostico, meta={"tipo_job": "diagnostico"})
+    except jobs.ServidorOcupado as exc:
+        return render_template_string(PAGINA_ERRO, erro=str(exc)), 503
+    return redirect(url_for("ver_busca", job_id=job_id), code=303)
+
+
+@app.route("/diagnostico-coletor", methods=["GET"])
+def diagnostico_coletor():
+    """Roda o COLETOR NOVO (VivaReal + ZAP) a partir do servidor, para uma cidade, e mostra estado por
+    portal, anúncios lidos e pico de memória. Desligado sem ADMIN_TOKEN. Uso:
+    /diagnostico-coletor?token=SEU_TOKEN  (opcionais: &cidade=suzano &paginas=1 &leve=0)"""
+    esperado = os.environ.get("ADMIN_TOKEN", "")
+    enviado = request.args.get("token", "")
+    if not esperado or not hmac.compare_digest(enviado.encode(), esperado.encode()):
+        abort(404)
+    cidade = request.args.get("cidade", "mogi-das-cruzes")   # Mogi já vem cadastrada no código
+    if cidade not in regiao.NOMES:
+        return render_template_string(PAGINA_ERRO, erro="cidade inválida (use o nome interno, ex.: suzano)"), 400
+    try:
+        paginas = max(1, min(3, int(request.args.get("paginas", "1"))))
+    except ValueError:
+        paginas = 1
+    leve = request.args.get("leve", "1") != "0"
+    filtros = {"tipo": "apartamento"} if request.args.get("tipo", "apartamento") == "apartamento" else {}
+    try:
+        job_id = jobs.gerenciador.enviar(_executar_diag_coletor, meta={"tipo_job": "diag_coletor", "limite_s": 600},
+                                         cidade=cidade, paginas=paginas, leve=leve, filtros=filtros)
     except jobs.ServidorOcupado as exc:
         return render_template_string(PAGINA_ERRO, erro=str(exc)), 503
     return redirect(url_for("ver_busca", job_id=job_id), code=303)
