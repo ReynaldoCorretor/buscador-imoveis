@@ -47,6 +47,46 @@ def _senha():
 # Lógica (testável sem Flask)
 # ---------------------------------------------------------------------------
 
+def _plural(n, um, varios):
+    return f"{n} {um if n == 1 else varios}"
+
+
+def detalhes(g) -> str:
+    """'62 m² · 2 quartos · 1 banheiro · 1 vaga' — só o que o anúncio informa (nada de 'vagas' sem número)."""
+    partes = []
+    try:
+        if g.get("area_m2") not in (None, ""):
+            partes.append(f"{float(g['area_m2']):g} m²")
+    except (TypeError, ValueError):
+        pass
+    for campo, um, varios in (("quartos", "quarto", "quartos"), ("banheiros", "banheiro", "banheiros"),
+                              ("vagas", "vaga", "vagas")):
+        v = g.get(campo)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            partes.append(_plural(int(v), um, varios))
+    return " · ".join(partes)
+
+
+def bairro_do_titulo(titulo, cidade_nome):
+    """O Chaves na Mão não tem bairro na lista, mas o título que ele gera traz:
+    'Apartamento A Venda 2 Quartos Sp Suzano Cidade Boa Vista 56M2 Rs140000' -> 'Cidade Boa Vista'.
+    Regra: palavras entre '<Sp> <cidade>' e o primeiro '<número>M2' / 'Rs<número>'. Sem acentos
+    (o portal tira). [VERIFICADO só nos títulos vistos em 02/11; formato pode mudar.]"""
+    palavras = (titulo or "").split()
+    alvo = regiao.norm(cidade_nome).split()
+    n = len(alvo)
+    for i, p in enumerate(palavras):
+        if p.lower() != "sp" or [regiao.norm(x) for x in palavras[i + 1:i + 1 + n]] != alvo:
+            continue
+        resto = []
+        for q in palavras[i + 1 + n:]:
+            if re.fullmatch(r"\d+(?:[.,]\d+)?m2", q, re.IGNORECASE) or re.fullmatch(r"rs\d+", q, re.IGNORECASE):
+                break
+            resto.append(q)
+        return " ".join(resto) or None
+    return None
+
+
 def validar_busca(args) -> tuple:
     """Mesmas regras do formulário de pedidos, mas o bairro é um NOME (vindo da lista de bairros
     vistos), não um slug cadastrado."""
@@ -121,16 +161,19 @@ def executar_chaves(cidade: str, filtros: dict) -> dict:
         quartos_min=lq[0] if lq else None, quartos_max=lq[-1] if lq else None,
         banheiros_min=filtros.get("banheiros_min"), area_min=filtros.get("area_min"),
         area_max=filtros.get("area_max"), preco_min=filtros.get("preco_min"), preco_max=filtros.get("preco_max"))
-    crit = {k: v for k, v in _criterios(filtros).items() if k not in ("bairro", "bairro_nome")}
+    crit = _criterios(filtros)
     itens = []
     for im in r.get("todos", []):
+        im = dict(im)
+        if not im.get("bairro"):
+            im["bairro"] = bairro_do_titulo(im.get("titulo"), regiao.NOMES[cidade])
         c = conferencia.avaliar(im, crit)
         itens.append(dict(im, **c, anuncio_id=None, primeira_vista=None))
     g = agrupar_resultados(itens)
     diag = "; ".join(r.get("diagnosticos_por_portal", {}).get("Chaves na Mão", [])[:3])
     return {"exatos": g["sim"] + g[None], "incompletos": g["incompleto"], "parecidos": g["não"][:MAX_PARECIDOS],
             "erro": r.get("erros", {}).get("Chaves na Mão"), "diagnostico": diag,
-            "bairro_ignorado": bool(filtros.get("bairro"))}
+            "bairro_ignorado": False}
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +185,7 @@ _CARD = """
   <div class="card">
     <div class="preco">{{ reais(g.preco) }}</div>
     <div class="tit">{{ g.titulo or 'Sem título' }}</div>
-    <div class="info">{% if g.area_m2 %}{{ '%g' % g.area_m2|float }} m² · {% endif %}{% if g.quartos is not none %}{{ g.quartos }} quartos · {% endif %}{% if g.banheiros is not none %}{{ g.banheiros }} banh. · {% endif %}{% if g.vagas is not none %}{{ g.vagas }} vagas{% endif %}</div>
+    <div class="info">{{ detalhes(g) }}</div>
     <div class="info">{{ g.bairro or 'bairro não informado' }}{% if g.tipo %} · {{ g.tipo }}{% endif %}{% if g.condominio %} · cond. {{ reais(g.condominio) }}{% endif %}</div>
     {% if g.motivos %}<div class="motivo">Fora do pedido: {{ g.motivos }}</div>{% endif %}
     {% if g.nao_informado %}<div class="falta">Não informado no anúncio: {{ g.nao_informado }}</div>{% endif %}
@@ -266,7 +309,7 @@ verChaves();
 FRAGMENTO_CHAVES = _CARD + """
 {% if erro_job %}<p class="erro">{{ erro_job }}</p>
 {% else %}
-  {% if r.bairro_ignorado %}<p class="dica">O Chaves na Mão não informa o bairro na lista: o filtro de bairro não foi aplicado aqui.</p>{% endif %}
+  <p class="dica">No Chaves na Mão o bairro é lido do título do anúncio (o portal escreve sem acentos).</p>
   {% if r.erro and not (r.exatos or r.incompletos or r.parecidos) %}<p class="falta">Sem resultados do Chaves na Mão: {{ r.erro }}</p>{% endif %}
   {{ blocos(r, 'Nenhum imóvel do Chaves na Mão bate com todos os critérios.') }}
   <p class="dica">Amostra: até 5 páginas por tipo (limite do próprio portal para robôs).</p>
@@ -304,7 +347,7 @@ def buscar():
     resumo = resumo_filtros(dict(filtros, bairro=filtros.get("bairro_nome"), paginas=None)).replace(", None pág.", "")
     return render_template_string(
         PAGINA_RESULTADOS, r=r, form=form, pedido=pedido, cidade=regiao.NOMES[filtros["cidade"]],
-        resumo=resumo + (f" — {erro}" if erro else ""), dias=DIAS_VALIDADE, hora=_hora_br, reais=_reais,
+        resumo=resumo + (f" — {erro}" if erro else ""), dias=DIAS_VALIDADE, hora=_hora_br, reais=_reais, detalhes=detalhes,
         job_chaves=job_chaves, erro_chaves=erro_chaves,
         url_estado=url_for("estado_busca", job_id=job_chaves) if job_chaves else None,
         url_chaves=url_for("busca.chaves", job_id=job_chaves) if job_chaves else None)
@@ -317,10 +360,10 @@ def chaves(job_id):
         abort(404)
     if job["estado"] == jobs.ERRO:
         return render_template_string(FRAGMENTO_CHAVES, erro_job=f"A busca no Chaves na Mão falhou: {job['erro']}",
-                                      r={}, hora=_hora_br, reais=_reais)
+                                      r={}, hora=_hora_br, reais=_reais, detalhes=detalhes)
     if job["estado"] != jobs.CONCLUIDO:
         return "", 202
-    return render_template_string(FRAGMENTO_CHAVES, erro_job=None, r=job["resultado"], hora=_hora_br, reais=_reais)
+    return render_template_string(FRAGMENTO_CHAVES, erro_job=None, r=job["resultado"], hora=_hora_br, reais=_reais, detalhes=detalhes)
 
 
 @bp.route("/bairros", methods=["GET"])
