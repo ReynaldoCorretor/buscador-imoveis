@@ -358,7 +358,10 @@ def agrupar_resultados(linhas):
             g["links"] = []
             grupos[chave] = g
             ordem.append(chave)
-        grupos[chave]["links"].append({"portal": l.get("portal") or "portal", "link": l["link"]})
+        portal = l.get("portal") or "portal"
+        # o ZAP às vezes publica o MESMO anúncio em dois endereços: um link por portal basta
+        if all(x["portal"] != portal for x in grupos[chave]["links"]):
+            grupos[chave]["links"].append({"portal": portal, "link": l["link"]})
     saida = {"sim": [], "incompleto": [], "não": [], None: []}
     for chave in ordem:
         g = grupos[chave]

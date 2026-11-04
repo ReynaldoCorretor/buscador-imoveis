@@ -67,6 +67,27 @@ def detalhes(g) -> str:
     return " · ".join(partes)
 
 
+def titulo_reserva(g) -> str:
+    """Para anúncio sem a frase de descrição: 'Apartamento em Parque Santa Rosa'."""
+    tipo = (g.get("tipo") or "imóvel").capitalize()
+    return f"{tipo} em {g['bairro']}" if g.get("bairro") else tipo
+
+
+ORDENS = {
+    "preco": ("Menor preço", lambda g: (g.get("preco") is None, g.get("preco") or 0)),
+    "preco_desc": ("Maior preço", lambda g: (g.get("preco") is None, -(g.get("preco") or 0))),
+    "area_desc": ("Maior área", lambda g: (g.get("area_m2") is None, -float(g.get("area_m2") or 0))),
+    "novos": ("Vistos pela 1ª vez mais recentemente",
+              lambda g: tuple(-ord(c) for c in str(g.get("primeira_vista") or ""))),
+}
+MOSTRAR_PRIMEIROS = 30
+
+
+def ordenar(lista, ordem):
+    chave = ORDENS.get(ordem, ORDENS["preco"])[1]
+    return sorted(lista, key=chave)
+
+
 def bairro_do_titulo(titulo, cidade_nome):
     """O Chaves na Mão não tem bairro na lista, mas o título que ele gera traz:
     'Apartamento A Venda 2 Quartos Sp Suzano Cidade Boa Vista 56M2 Rs140000' -> 'Cidade Boa Vista'.
@@ -184,7 +205,7 @@ _CARD = """
 {% macro card(g) %}
   <div class="card">
     <div class="preco">{{ reais(g.preco) }}</div>
-    <div class="tit">{{ g.titulo or 'Sem título' }}</div>
+    <div class="tit">{{ g.titulo or titulo_reserva(g) }}</div>
     <div class="info">{{ detalhes(g) }}</div>
     <div class="info">{{ g.bairro or 'bairro não informado' }}{% if g.tipo %} · {{ g.tipo }}{% endif %}{% if g.condominio %} · cond. {{ reais(g.condominio) }}{% endif %}</div>
     {% if g.motivos %}<div class="motivo">Fora do pedido: {{ g.motivos }}</div>{% endif %}
@@ -193,12 +214,18 @@ _CARD = """
       {% if g.ultima_vista %} · coletado {{ hora(g.ultima_vista) }}{% endif %}</div>
   </div>
 {% endmacro %}
+{% macro lista(itens) %}
+  {% for g in itens[:primeiros] %}{{ card(g) }}{% endfor %}
+  {% if itens|length > primeiros %}<details><summary>Ver mais {{ itens|length - primeiros }}</summary>
+    {% for g in itens[primeiros:] %}{{ card(g) }}{% endfor %}</details>{% endif %}
+{% endmacro %}
 {% macro blocos(r, rotulo_vazio) %}
   <h3>✅ Exatos ({{ r.exatos|length }})</h3>
-  {% for g in r.exatos %}{{ card(g) }}{% else %}<p class="dica">{{ rotulo_vazio }}</p>{% endfor %}
+  {% if not r.exatos %}<p class="dica">{{ rotulo_vazio }}</p>{% endif %}
+  {{ lista(r.exatos) }}
   {% if r.incompletos %}<h3>🟡 Faltou algum dado no anúncio ({{ r.incompletos|length }})</h3>
     <p class="dica">Nada falhou, mas algum critério não pôde ser conferido. Confira no anúncio.</p>
-    {% for g in r.incompletos %}{{ card(g) }}{% endfor %}{% endif %}
+    {{ lista(r.incompletos) }}{% endif %}
   {% if r.parecidos %}<details><summary>Quase: falham em um só critério ({{ r.parecidos|length }})</summary>
     {% for g in r.parecidos %}{{ card(g) }}{% endfor %}</details>{% endif %}
 {% endmacro %}
@@ -260,6 +287,13 @@ PAGINA_RESULTADOS = """<!DOCTYPE html><html lang="pt-br"><head><meta charset="UT
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>Resultados</title>""" + _ESTILO + """
 </head><body>""" + _CARD + """<div class="box">
   <h1>{{ resumo }}</h1>
+  <form method="get" action="{{ url_for('busca.buscar') }}" style="margin:8px 0">
+    {% for k, v in form.items() if k != 'ordem' %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+    <label for="ordem">Ordenar por</label>
+    <select id="ordem" name="ordem" onchange="this.form.submit()">
+      {% for chave, (rotulo, _) in ordens.items() %}<option value="{{ chave }}" {% if chave == ordem %}selected{% endif %}>{{ rotulo }}</option>{% endfor %}
+    </select>
+  </form>
   <p><a href="{{ url_for('busca.inicio', **form) }}">&larr; Mudar a busca</a></p>
 </div>
 <div class="box">
@@ -335,20 +369,24 @@ def buscar():
         r = {"exatos": [], "incompletos": [], "parecidos": [], "total_guardados": 0,
              "coletado_de": None, "coletado_ate": None}
         erro = f"Não consegui ler o banco ({type(exc).__name__})."
+    ordem = request.args.get("ordem", "preco")
+    ordem = ordem if ordem in ORDENS else "preco"
+    for k in ("exatos", "incompletos", "parecidos"):
+        r[k] = ordenar(r[k], ordem)
     job_chaves, erro_chaves = None, ""
     try:
-        job_chaves = jobs.gerenciador.enviar(executar_chaves, meta={"tipo_job": "chaves"},
+        job_chaves = jobs.gerenciador.enviar(executar_chaves, meta={"tipo_job": "chaves", "ordem": ordem},
                                              cidade=filtros["cidade"], filtros=filtros)
     except jobs.ServidorOcupado as exc:
         erro_chaves = str(exc)
     form = {k: v for k, v in request.args.items() if v}
-    pedido = {k: v for k, v in form.items() if k != "bairro"}   # pedido de coleta: bairro só se cadastrado
+    pedido = {k: v for k, v in form.items() if k not in ("bairro", "ordem")}   # pedido de coleta: bairro só se cadastrado
     pedido["paginas"] = "2"
     resumo = resumo_filtros(dict(filtros, bairro=filtros.get("bairro_nome"), paginas=None)).replace(", None pág.", "")
     return render_template_string(
         PAGINA_RESULTADOS, r=r, form=form, pedido=pedido, cidade=regiao.NOMES[filtros["cidade"]],
-        resumo=resumo + (f" — {erro}" if erro else ""), dias=DIAS_VALIDADE, hora=_hora_br, reais=_reais, detalhes=detalhes,
-        job_chaves=job_chaves, erro_chaves=erro_chaves,
+        resumo=resumo + (f" — {erro}" if erro else ""), dias=DIAS_VALIDADE, hora=_hora_br, reais=_reais, detalhes=detalhes, titulo_reserva=titulo_reserva, primeiros=MOSTRAR_PRIMEIROS,
+        job_chaves=job_chaves, erro_chaves=erro_chaves, ordens=ORDENS, ordem=ordem,
         url_estado=url_for("estado_busca", job_id=job_chaves) if job_chaves else None,
         url_chaves=url_for("busca.chaves", job_id=job_chaves) if job_chaves else None)
 
@@ -360,10 +398,13 @@ def chaves(job_id):
         abort(404)
     if job["estado"] == jobs.ERRO:
         return render_template_string(FRAGMENTO_CHAVES, erro_job=f"A busca no Chaves na Mão falhou: {job['erro']}",
-                                      r={}, hora=_hora_br, reais=_reais, detalhes=detalhes)
+                                      r={}, hora=_hora_br, reais=_reais, detalhes=detalhes, titulo_reserva=titulo_reserva, primeiros=MOSTRAR_PRIMEIROS)
     if job["estado"] != jobs.CONCLUIDO:
         return "", 202
-    return render_template_string(FRAGMENTO_CHAVES, erro_job=None, r=job["resultado"], hora=_hora_br, reais=_reais, detalhes=detalhes)
+    r = dict(job["resultado"])
+    for k in ("exatos", "incompletos", "parecidos"):
+        r[k] = ordenar(r.get(k, []), job["meta"].get("ordem", "preco"))
+    return render_template_string(FRAGMENTO_CHAVES, erro_job=None, r=r, hora=_hora_br, reais=_reais, detalhes=detalhes, titulo_reserva=titulo_reserva, primeiros=MOSTRAR_PRIMEIROS)
 
 
 @bp.route("/bairros", methods=["GET"])
